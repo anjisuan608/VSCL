@@ -1,0 +1,148 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:vscl:schemas:instance-settings:1.0.0",
+  "title": "VSCL Instance Game Settings",
+  "description": "VSCL 实例级游戏设置（<实例目录>/.vscl/config/vsclversion.json）。采用「省略即继承」模型：文件中只存放相对于全局设置被覆盖的键；恢复跟随 = 删除对应键，文件变空则删除文件本身。首次覆盖任一项时才会创建本文件。",
+  "allOf": [
+    {
+      "$ref": "#/$defs/gameSettings"
+    },
+    {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["$schema"],
+      "patternProperties": {
+        "^\\$schema$": {
+          "enum": ["urn:vscl:schemas:instance-settings:1.0.0"]
+        }
+      },
+      "properties": {
+        "parent": {
+          "$ref": "#/$defs/globalPresetID"
+        },
+        "icon": {
+          "enum": [
+            "default",
+            "grass",
+            "chest",
+            "command",
+            "craft_table",
+            "furnace",
+            "optifine",
+            "fabric",
+            "forge",
+            "neoforge",
+            "quilt",
+            "cleanroom",
+            "legacy_fabric",
+            "liteloader"
+          ],
+          "description": "实例显示图标键。省略时按已安装组件自动推断（forge→forge、fabric→fabric…），存在自定义 icon.* 文件时优先显示该图片。"
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "globalPresetID": {
+      "type": "string",
+      "enum": ["default"],
+      "description": "继承的全局游戏设置预设 id。当前版本全局设置为单例，固定为 default。"
+    },
+    "gameSettings": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "可被本实例覆盖的游戏设置字段（全部可选，省略即继承全局）。注意：启动链路实现前，仅 minMemory / maxMemory / jvmArgs / javaPath / quickPlay 生效，其余字段为格式预留，后续里程碑启用。",
+      "properties": {
+        "javaType": {
+          "enum": ["AUTO", "VERSION", "DETECTED", "CUSTOM"],
+          "description": "Java 选择策略：AUTO=按游戏版本自动匹配；DETECTED=使用检测到的指定版本；CUSTOM=使用 customJavaPath 指定路径。"
+        },
+        "customJavaVersion": {
+          "type": "string",
+          "description": "javaType=DETECTED 时所需 Java 主版本（如 \"8\"、\"21\"）"
+        },
+        "customJavaPath": {
+          "type": "string",
+          "description": "javaType=CUSTOM 时的 Java 可执行文件路径（也可直接使用 javaPath 简写键）"
+        },
+        "javaPath": {
+          "type": "string",
+          "description": "本实例使用的 Java 可执行文件路径（等价于 javaType=CUSTOM + customJavaPath）"
+        },
+        "minMemory": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "最小内存（MB，-Xms）"
+        },
+        "maxMemory": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "最大内存（MB，-Xmx）"
+        },
+        "jvmArgs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "额外 JVM 参数。整体替换全局值（数组不合并）"
+        },
+        "windowType": {
+          "enum": ["WINDOWED", "FULLSCREEN", "MAXIMIZED"],
+          "description": "窗口模式"
+        },
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "窗口宽度（windowType=WINDOWED 时生效）"
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "窗口高度（windowType=WINDOWED 时生效）"
+        },
+        "processPriority": {
+          "enum": ["LOW", "BELOW_NORMAL", "NORMAL", "ABOVE_NORMAL", "HIGH"],
+          "description": "游戏进程优先级"
+        },
+        "launcherVisibility": {
+          "enum": ["CLOSE", "HIDE", "KEEP", "HIDE_AND_REOPEN"],
+          "description": "启动游戏后本扩展界面的行为：关闭/隐藏/保留/隐藏并在游戏退出后恢复"
+        },
+        "environmentVariables": {
+          "type": "string",
+          "description": "游戏进程环境变量，每行一条 KEY=VALUE"
+        },
+        "preLaunchCommand": {
+          "type": "string",
+          "description": "启动游戏前执行的命令"
+        },
+        "postExitCommand": {
+          "type": "string",
+          "description": "游戏退出后执行的命令"
+        },
+        "quickPlay": {
+          "type": "string",
+          "description": "Quick Play：启动后自动进入的世界名称（留空禁用）"
+        },
+        "showLogs": {
+          "type": "boolean",
+          "description": "启动时打开游戏日志终端"
+        },
+        "enableDebugLogOutput": {
+          "type": "boolean",
+          "description": "启用游戏 debug 日志输出（-Dlog4j.debug）"
+        },
+        "notPatchNatives": {
+          "type": "boolean",
+          "description": "禁用 natives 自动解压补丁（使用 nativesDirectory 指定目录）"
+        },
+        "nativesDirectory": {
+          "type": "string",
+          "description": "自定义 natives 目录"
+        },
+        "graphicsBackend": {
+          "enum": ["DEFAULT", "OPENGL", "VULKAN"],
+          "description": "图形后端（实验性）"
+        }
+      }
+    }
+  }
+}

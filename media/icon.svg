@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+  <!-- 草方块风格图标：使用 currentColor 适配 VS Code 主题 -->
+  <path d="M3 3h18v18H3V3zm2 2v4h6V5H5zm8 0v4h6V5h-6zM5 11v3h6v-3H5zm8 0v3h6v-3h-6zM5 16v3h6v-3H5zm8 0v3h6v-3h-6z" fill-opacity="0.9"/>
+  <rect x="5" y="5" width="6" height="4" rx="0.5" fill-opacity="0.55"/>
+  <rect x="13" y="5" width="6" height="4" rx="0.5" fill-opacity="0.55"/>
+  <rect x="5" y="11" width="6" height="3" rx="0.5" fill-opacity="0.35"/>
+  <rect x="13" y="11" width="6" height="3" rx="0.5" fill-opacity="0.35"/>
+</svg>

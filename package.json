@@ -1,0 +1,227 @@
+{
+  "name": "vscl",
+  "displayName": "VSCL - Minecraft Launcher",
+  "description": "在 VS Code 中管理与启动 Minecraft：实例管理、Mod 管理、整合包、下载中心（设计参考 HMCL，独立实现）",
+  "version": "0.0.1",
+  "publisher": "vscl",
+  "license": "AGPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vscl-dev/vscl"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "extensionKind": [
+    "ui"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "vscl",
+          "title": "Visual Studio Craft Launcher",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "vscl": [
+        {
+          "id": "vscl.main",
+          "name": "Visual Studio Craft Launcher",
+          "type": "webview"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "vscl.launch",
+        "title": "VSCL: 启动游戏"
+      },
+      {
+        "command": "vscl.selectInstance",
+        "title": "VSCL: 选择实例"
+      },
+      {
+        "command": "vscl.refresh",
+        "title": "VSCL: 刷新实例列表"
+      },
+      {
+        "command": "vscl.addGameDirectory",
+        "title": "VSCL: 添加游戏目录"
+      },
+      {
+        "command": "vscl.detectJava",
+        "title": "VSCL: 检测 Java 运行时"
+      },
+      {
+        "command": "vscl.openPage.download",
+        "title": "VSCL: 打开下载中心"
+      },
+      {
+        "command": "vscl.openPage.instances",
+        "title": "VSCL: 打开实例列表"
+      },
+      {
+        "command": "vscl.openPage.multiplayer",
+        "title": "VSCL: 打开多人联机"
+      }
+    ],
+    "configuration": {
+      "title": "VSCL",
+      "properties": {
+        "vscl.javaPath": {
+          "type": "string",
+          "scope": "machine",
+          "markdownDescription": "手动指定 Java 可执行文件路径。**留空**时自动检测（PATH、`JAVA_HOME`、各平台标准安装目录、官方启动器 runtime）。",
+          "default": ""
+        },
+        "vscl.gameDirectories": {
+          "type": "array",
+          "scope": "machine",
+          "items": {
+            "type": "string"
+          },
+          "markdownDescription": "额外注册的游戏目录（`.minecraft`）。使用「VSCL: 添加游戏目录」命令管理。",
+          "default": []
+        },
+        "vscl.activeGameDirectory": {
+          "type": "string",
+          "scope": "machine",
+          "markdownDescription": "当前激活的游戏目录。**留空**时按优先级自动选择：工作区文件夹（检测命中）> 官方启动器目录。",
+          "default": ""
+        },
+        "vscl.useIntegratedBrowser": {
+          "type": "boolean",
+          "scope": "machine",
+          "markdownDescription": "是否使用 VS Code 内置浏览器（Simple Browser）打开链接。账户登录等敏感链接始终使用系统浏览器。",
+          "default": false
+        },
+        "vscl.downloadSource": {
+          "type": "string",
+          "enum": [
+            "official",
+            "bmclapi"
+          ],
+          "enumDescriptions": [
+            "Mojang / 官方源",
+            "BMCLAPI 镜像（国内加速）"
+          ],
+          "scope": "machine",
+          "description": "文件下载源",
+          "default": "bmclapi"
+        },
+        "vscl.game.minMemory": {
+          "type": "number",
+          "scope": "machine",
+          "markdownDescription": "全局游戏设置：最小内存（MB）。实例可在 `.vscl/config/vsclversion.json` 中覆盖。",
+          "default": 512
+        },
+        "vscl.game.maxMemory": {
+          "type": "number",
+          "scope": "machine",
+          "markdownDescription": "全局游戏设置：最大内存（MB）。实例可在 `.vscl/config/vsclversion.json` 中覆盖。",
+          "default": 4096
+        },
+        "vscl.game.jvmArgs": {
+          "type": "array",
+          "scope": "machine",
+          "items": {
+            "type": "string"
+          },
+          "markdownDescription": "全局游戏设置：额外 JVM 参数。实例可在 `.vscl/config/vsclversion.json` 中覆盖（整体替换）。",
+          "default": []
+        }
+      }
+    },
+    "jsonValidation": [
+      {
+        "fileMatch": "/.vscl/config/vsclversion.json",
+        "url": "./schemas/vsclversion.schema.json"
+      }
+    ],
+    "walkthroughs": [
+      {
+        "id": "vscl.gettingStarted",
+        "title": "VSCL 快速上手",
+        "description": "配置游戏目录、检测 Java、选择实例并启动",
+        "steps": [
+          {
+            "id": "welcome",
+            "title": "欢迎使用 VSCL",
+            "description": "VSCL 将 VS Code 变成 Minecraft 启动器：管理实例、Mod、整合包，并启动游戏。",
+            "media": {
+              "image": "media/icon.svg",
+              "altText": "VSCL"
+            }
+          },
+          {
+            "id": "directory",
+            "title": "游戏目录",
+            "description": "默认使用官方启动器目录。打开包含 `.minecraft` 的文件夹、或使用「添加游戏目录」命令注册其他目录。",
+            "media": {
+              "image": "media/icon.svg",
+              "altText": "游戏目录"
+            },
+            "commands": [
+              {
+                "command": "vscl.addGameDirectory",
+                "title": "添加游戏目录"
+              }
+            ]
+          },
+          {
+            "id": "java",
+            "title": "Java 运行时",
+            "description": "运行「检测 Java」查看本机可用的 Java。不同游戏版本需要对应 Java（≤1.16.5 需 Java 8，1.18+ 需 17，1.20.5+ 需 21，26.x 需 25）。",
+            "media": {
+              "image": "media/icon.svg",
+              "altText": "Java"
+            },
+            "commands": [
+              {
+                "command": "vscl.detectJava",
+                "title": "检测 Java 运行时"
+              }
+            ]
+          },
+          {
+            "id": "launch",
+            "title": "选择并启动",
+            "description": "在侧栏选择实例后启动游戏（启动功能开发中）。",
+            "media": {
+              "image": "media/icon.svg",
+              "altText": "启动"
+            },
+            "commands": [
+              {
+                "command": "vscl.selectInstance",
+                "title": "选择实例"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "scripts": {
+    "gen-icons": "node scripts/gen-icons.mjs",
+    "precompile": "npm run gen-icons",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "vscode:prepublish": "npm run compile"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.5.0"
+  }
+}
