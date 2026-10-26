@@ -124,15 +124,14 @@ export function resolveActiveDirectory(ctx: ResolveContext): ResolvedDirectory {
     return { dir: workDirToDataDir(work), source: "registered", confirmed: fs.existsSync(workDirToDataDir(work)) };
   }
 
-  // ② 工作区文件夹（特征检测命中：本身是游戏数据目录 → 其上级即工作目录；含 .minecraft 子目录 → 直取）
+  // ② 工作区文件夹（选择了工作区即以其为目录：root 本身是数据目录 → 上级为工作目录；
+  //    否则数据目录 = <root>/.minecraft，不存在时由安装流程创建）
   for (const root of ctx.workspaceRoots) {
     const probe = probeGameDirectory(root);
     if (probe.isGameDir) {
       return { dir: root, source: "workspace", confirmed: true };
     }
-    if (probe.nestedMinecraft) {
-      return { dir: probe.nestedMinecraft, source: "workspace", confirmed: true };
-    }
+    return { dir: path.join(root, ".minecraft"), source: "workspace", confirmed: probe.nestedMinecraft !== undefined };
   }
 
   // ③ 注册表工作目录（数据目录 = <工作目录>/.minecraft，任一存在即命中）

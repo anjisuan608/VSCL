@@ -11,6 +11,7 @@ import * as vscode from "vscode";
 import { Settings } from "./config/settings";
 import { ConfigStore, VsclSettings } from "./core/configStore";
 import { cacheRoot, cacheStats, clearCache, formatBytes } from "./core/cacheManager";
+import { readWorkspaceSelection, writeWorkspaceSelection, clearWorkspaceSelection, hasWorkspaceGameInstances, firstWorkspaceRoot } from "./core/workspacePersist";
 import { COMPONENTS, installedComponentIds, extractComponentVersions, baseMinecraftVersion } from "./core/components";
 import { Store } from "./core/state/store";
 import { resolveActiveDirectory, officialGameDirectory, isSameDirectory, probeGameDirectory, normalizePathKey, normalizeWorkDir, workDirToDataDir, displayWorkDir } from "./core/game/gameDirectory";
@@ -88,8 +89,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     });
     const instances = await scanInstances(resolved.dir);
 
-    // 恢复本窗口上次选中的实例（workspaceState：每窗口独立，避免多窗口串号）
-    const persisted = context.workspaceState.get<string>(SELECTED_INSTANCE_KEY);
+    // 失效清理：配置文件存在但工作区无 .minecraft 或 versions 无有效实例 → 清空记录的选择
+    const workspaceRootForCheck = firstWorkspaceRoot(vscode.workspace.workspaceFolders);
+    if (workspaceRootForCheck && readWorkspaceSelection(workspaceRootForCheck) && !hasWorkspaceGameInstances(workspaceRootForCheck)) {
+      clearWorkspaceSelection(workspaceRootForCheck);
+    }
+
+    // 恢复选中实例：工作区配置文件 > workspaceState > 首实例（标识不存在时忽略、逐级回落）
+    const workspaceRoot = firstWorkspaceRoot(vscode.workspace.workspaceFolders);
+    const persistedFile = workspaceRoot ? readWorkspaceSelection(workspaceRoot) : undefined;
+    const persisted = persistedFile ?? context.workspaceState.get<string>(SELECTED_INSTANCE_KEY);
     const selected =
       instances.find((i) => i.id === persisted)?.id ?? instances[0]?.id;
 
@@ -284,6 +293,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     store.event((s) => {
       if (s.selectedInstanceId) {
         void context.workspaceState.update(SELECTED_INSTANCE_KEY, s.selectedInstanceId);
+        // 工作区配置文件：仅 Minecraft 上下文（工作区/添加目录的选中）实时写入；官方兜底不留痕
+        persistWorkspaceSelection(s.selectedInstanceId);
       }
       // 面板随选中实例/运行状态/设置变更刷新
       InstancePanel.current?.refresh();
@@ -570,6 +581,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       installNewPlan = {};
       await refresh();
       store.update({ selectedInstanceId: finalId });
+      persistWorkspaceSelection(finalId, true); // 安装场景：强制写入工作区选择
       void vscode.window.showInformationMessage(`VSCL：「${finalId}」安装完成，已选中可直接启动。`);
     } finally {
       installNewDownloading = false;
@@ -711,12 +723,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         });
       }
     };
-    // 工作区（特征命中的文件夹：本身是数据目录 → 其上级；含 .minecraft → 该文件夹）
+    // 工作区（选择了工作区即列出：root 本身是数据目录 → 上级为工作目录；否则 <root>/.minecraft）
     for (const root of (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath)) {
       const probe = probeGameDirectory(root);
       if (probe.isGameDir) {
         push(displayWorkDir(root), "workspace");
-      } else if (probe.nestedMinecraft) {
+      } else {
         push(root, "workspace");
       }
     }
@@ -1166,6 +1178,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return picked ? { width: picked.width, height: picked.height } : undefined;
   }
 
+  /**
+   * 工作区实例持久化（<工作区>/.vscode/vscl/config/vsclworkspace.json）。
+   * 仅在涉及 Minecraft 的上下文写入：工作区 .minecraft / 添加目录 .minecraft 的选中
+   * （含自动选择）；官方启动器目录兜底场景不留痕（除非安装场景强制写入）。
+   */
+  function persistWorkspaceSelection(instanceId: string, force = false): void {
+    const workspaceRoot = firstWorkspaceRoot(vscode.workspace.workspaceFolders);
+    if (!workspaceRoot) {
+      return; // 无工作区不落文件（workspaceState 兜底）
+    }
+    if (!force && store.state.activeSource === "official") {
+      return; // 纯官方目录兜底：工作区与 Minecraft 无关，不留痕
+    }
+    writeWorkspaceSelection(workspaceRoot, instanceId);
+  }
+
   /** 启动器设置页状态快照（Java/目录/内存/下载） */
   function settingsPanelState(): SettingsPanelState {
     const g = Settings.globalGameSettings();
@@ -1382,6 +1410,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       );
       await refresh();
       store.update({ selectedInstanceId: newId });
+      persistWorkspaceSelection(newId, true); // 安装场景：强制写入工作区选择
       InstancePanel.current?.refresh();
       void vscode.window.showInformationMessage(`VSCL：已安装 ${newId}，可直接启动。`);
     } catch (e) {
