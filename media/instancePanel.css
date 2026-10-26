@@ -1,0 +1,392 @@
+/* VSCL 实例设置面板样式表（对齐 HMCL 实例详情页视觉：分区卡片 / 行式设置 / Tab 导航）
+   颜色全部引用 VS Code 主题变量，自动跟随明/暗/高对比主题。 */
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+  color: var(--vscode-foreground);
+  background-color: var(--vscode-editor-background);
+}
+
+/* ── Tab 导航 ── */
+.tabs {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  gap: 2px;
+  padding: 0 20px;
+  background-color: var(--vscode-editor-background);
+  border-bottom: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.25));
+}
+
+.tab {
+  padding: 11px 16px 9px;
+  cursor: pointer;
+  color: var(--vscode-descriptionForeground);
+  border-bottom: 2px solid transparent;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.tab:hover {
+  color: var(--vscode-foreground);
+}
+
+.tab.active {
+  color: var(--vscode-foreground);
+  font-weight: 600;
+  border-bottom-color: var(--vscode-focusBorder);
+}
+
+.tab.placeholder {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ── 页面容器 ── */
+.page {
+  padding: 20px 28px 48px;
+  max-width: 920px;
+  margin: 0 auto;
+}
+
+.page[hidden] {
+  display: none;
+}
+
+/* ── 分区卡片（HMCL 式段落） ── */
+.section {
+  margin-bottom: 22px;
+  border: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.2));
+  border-radius: 8px;
+  background-color: var(--vscode-editorWidget-background, var(--vscode-input-background));
+  overflow: hidden;
+}
+
+.section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  background-color: var(--vscode-sideBarSectionHeader-background, rgba(128, 128, 128, 0.08));
+  border-bottom: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.15));
+}
+
+.section-desc {
+  padding: 8px 16px 0;
+  font-size: 12px;
+  color: var(--vscode-descriptionForeground);
+  line-height: 1.6;
+}
+
+/* ── 设置行 ── */
+.row {
+  display: grid;
+  grid-template-columns: 210px 1fr;
+  gap: 14px;
+  align-items: center;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.1));
+}
+
+.row:last-child {
+  border-bottom: none;
+}
+
+.row-label {
+  line-height: 1.4;
+}
+
+.row-name {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.row-hint {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  margin-top: 2px;
+}
+
+.row-control {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  min-width: 0;
+}
+
+/* 覆盖开关 */
+.override-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--vscode-descriptionForeground);
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+
+.override-toggle input {
+  accent-color: var(--vscode-focusBorder);
+  cursor: pointer;
+}
+
+/* 表单控件 */
+input[type="text"],
+input[type="number"],
+select,
+textarea {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 9px;
+  border: 1px solid var(--vscode-input-border, transparent);
+  border-radius: 3px;
+  background-color: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  font-family: inherit;
+  font-size: 13px;
+  outline: none;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--vscode-focusBorder);
+}
+
+input:disabled,
+select:disabled,
+textarea:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+textarea {
+  min-height: 72px;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.row-suffix {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  white-space: nowrap;
+}
+
+/* ── 按钮 ── */
+button.tool {
+  padding: 6px 16px;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 13px;
+  background-color: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+}
+
+button.tool:hover {
+  background-color: var(--vscode-button-hoverBackground);
+}
+
+button.tool.secondary {
+  background-color: var(--vscode-button-secondaryBackground, var(--vscode-input-background));
+  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+}
+
+button.tool.secondary:hover {
+  background-color: var(--vscode-button-secondaryHoverBackground, rgba(128, 128, 128, 0.2));
+}
+
+.toolbar {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+/* ── 徽标 ── */
+.badge {
+  display: inline-block;
+  font-size: 11px;
+  padding: 2px 10px;
+  border-radius: 10px;
+  background-color: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+  white-space: nowrap;
+}
+
+.badge.large {
+  font-size: 12px;
+  padding: 4px 14px;
+}
+
+/* ── 列表（Mod / 资源包 / 世界） ── */
+.list-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 16px;
+  border-bottom: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.1));
+}
+
+.list-row:last-child {
+  border-bottom: none;
+}
+
+.list-row:hover {
+  background-color: var(--vscode-list-hoverBackground);
+}
+
+.list-row.dimmed {
+  opacity: 0.5;
+}
+
+.list-icon {
+  display: inline-flex;
+  color: var(--vscode-descriptionForeground);
+  flex-shrink: 0;
+}
+
+.list-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.list-name {
+  font-weight: 600;
+  font-size: 13px;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.list-meta {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  flex-shrink: 0;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.icon-btn {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 5px;
+  border-radius: 3px;
+  color: var(--vscode-foreground);
+  display: inline-flex;
+  opacity: 0.7;
+  flex-shrink: 0;
+}
+
+.icon-btn:hover {
+  opacity: 1;
+  background-color: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15));
+}
+
+.icon-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* ── 空态 / 提示 ── */
+.empty {
+  padding: 40px 16px;
+  text-align: center;
+  color: var(--vscode-descriptionForeground);
+  font-size: 13px;
+}
+
+.note {
+  margin: 0 0 14px;
+  padding: 10px 14px;
+  border-left: 3px solid var(--vscode-focusBorder);
+  background-color: var(--vscode-textBlockQuote-background, rgba(128, 128, 128, 0.08));
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--vscode-foreground);
+  border-radius: 0 4px 4px 0;
+}
+
+.note code {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 11px;
+  background-color: rgba(128, 128, 128, 0.15);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+/* ── 实例/全局模式切换（分段控件） ── */
+.segmented {
+  display: inline-flex;
+  margin-bottom: 16px;
+  border: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.3));
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.seg {
+  padding: 6px 18px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--vscode-descriptionForeground);
+  background-color: transparent;
+  user-select: none;
+}
+
+.seg:hover {
+  color: var(--vscode-foreground);
+}
+
+.seg.active {
+  background-color: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  font-weight: 600;
+}
+
+/* 实例头 */
+.instance-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px;
+  margin-bottom: 18px;
+  border: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.2));
+  border-radius: 8px;
+  background-color: var(--vscode-editorWidget-background, var(--vscode-input-background));
+}
+
+.instance-head img {
+  width: 40px;
+  height: 40px;
+  border-radius: 6px;
+}
+
+.instance-head .id {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.instance-head .meta {
+  font-size: 12px;
+  color: var(--vscode-descriptionForeground);
+  margin-top: 3px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}

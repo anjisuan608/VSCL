@@ -1,0 +1,195 @@
+/* 下载中心样式 —— 颜色全部引用 VS Code 主题变量 */
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+  color: var(--vscode-foreground);
+  background-color: var(--vscode-editor-background);
+}
+
+.dc-header {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 16px;
+  background-color: var(--vscode-editor-background);
+  border-bottom: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.2));
+}
+
+.dc-tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.dc-tab {
+  padding: 6px 12px;
+  border-radius: 4px 4px 0 0;
+  cursor: pointer;
+  color: var(--vscode-descriptionForeground);
+}
+
+.dc-tab.active {
+  color: var(--vscode-foreground);
+  font-weight: 600;
+  border-bottom: 2px solid var(--vscode-focusBorder);
+}
+
+.dc-tab.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.dc-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.dc-search {
+  width: 220px;
+  padding: 5px 10px;
+  border: 1px solid var(--vscode-input-border, transparent);
+  border-radius: 4px;
+  background-color: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  outline: none;
+}
+
+.dc-search:focus {
+  border-color: var(--vscode-focusBorder);
+}
+
+.dc-button {
+  padding: 5px 12px;
+  border: none;
+  border-radius: 4px;
+  background-color: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.dc-button:hover:not(:disabled) {
+  background-color: var(--vscode-button-hoverBackground);
+}
+
+.dc-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.dc-latest {
+  display: flex;
+  gap: 12px;
+  padding: 12px 16px;
+  flex-wrap: wrap;
+}
+
+.dc-latest-card {
+  flex: 1;
+  min-width: 240px;
+  padding: 12px;
+  border: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.25));
+  border-radius: 6px;
+  background-color: var(--vscode-editorWidget-background, var(--vscode-input-background));
+}
+
+.dc-latest-card .tag {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.dc-latest-card .name {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 4px 0 8px;
+}
+
+.dc-filters {
+  display: flex;
+  gap: 8px;
+  padding: 0 16px 10px;
+}
+
+.dc-chip {
+  padding: 3px 12px;
+  border-radius: 12px;
+  cursor: pointer;
+  font-size: 12px;
+  border: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.3));
+  color: var(--vscode-descriptionForeground);
+}
+
+.dc-chip.active {
+  background-color: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+  border-color: transparent;
+}
+
+.dc-list {
+  padding: 0 16px 24px;
+}
+
+.dc-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: 4px;
+}
+
+.dc-row:hover {
+  background-color: var(--vscode-list-hoverBackground);
+}
+
+.dc-row .id {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.dc-row .meta {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  flex-shrink: 0;
+}
+
+.dc-badge {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 8px;
+  border-radius: 8px;
+  background-color: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+  flex-shrink: 0;
+}
+
+.dc-installed {
+  font-size: 11px;
+  color: var(--vscode-testing-iconPassed, #75beff);
+  flex-shrink: 0;
+}
+
+.dc-empty {
+  padding: 32px;
+  text-align: center;
+  color: var(--vscode-descriptionForeground);
+}
+
+.dc-error {
+  margin: 12px 16px;
+  padding: 10px;
+  border-left: 3px solid var(--vscode-errorForeground);
+  color: var(--vscode-errorForeground);
+}

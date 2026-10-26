@@ -20,6 +20,16 @@ export interface InstanceOverrides {
   maxMemory?: number;
   jvmArgs?: string[];
   quickPlay?: string;
+  windowType?: string;
+  width?: number;
+  height?: number;
+  processPriority?: string;
+  launcherVisibility?: string;
+  environmentVariables?: string;
+  preLaunchCommand?: string;
+  postExitCommand?: string;
+  showLogs?: boolean;
+  enableDebugLogOutput?: boolean;
 }
 
 /** 可被实例覆盖的配置键 */
@@ -85,11 +95,44 @@ export function resetOverride(instanceDir: string, key: OverrideKey): void {
   setOverride(instanceDir, key, undefined);
 }
 
+/** 全局设置 ⊕ 实例覆盖后的生效设置 */
+export interface EffectiveGameSettings {
+  minMemory: number;
+  maxMemory: number;
+  jvmArgs: string[];
+  javaPath?: string;
+  quickPlay?: string;
+  /** 窗口模式（覆盖值） */
+  windowType?: string;
+  width?: number;
+  height?: number;
+  processPriority?: string;
+  launcherVisibility?: string;
+  /** KEY=VALUE 每行一条 */
+  environmentVariables?: string;
+  preLaunchCommand?: string;
+  postExitCommand?: string;
+  showLogs?: boolean;
+  enableDebugLogOutput?: boolean;
+}
+
 /** 全局设置 ⊕ 实例覆盖 → 生效配置（浅合并，数组整体替换） */
-export function effectiveSettings(global: GlobalGameSettings, overrides: InstanceOverrides): GlobalGameSettings {
+export function effectiveSettings(global: GlobalGameSettings, overrides: InstanceOverrides): EffectiveGameSettings {
   return {
     minMemory: overrides.minMemory ?? global.minMemory,
     maxMemory: overrides.maxMemory ?? global.maxMemory,
     jvmArgs: overrides.jvmArgs ?? global.jvmArgs,
+    javaPath: overrides.javaPath,
+    quickPlay: overrides.quickPlay,
+    windowType: overrides.windowType,
+    width: overrides.width,
+    height: overrides.height,
+    processPriority: overrides.processPriority,
+    launcherVisibility: overrides.launcherVisibility,
+    environmentVariables: overrides.environmentVariables,
+    preLaunchCommand: overrides.preLaunchCommand,
+    postExitCommand: overrides.postExitCommand,
+    showLogs: overrides.showLogs,
+    enableDebugLogOutput: overrides.enableDebugLogOutput,
   };
 }

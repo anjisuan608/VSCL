@@ -25,7 +25,9 @@ VSCL 本体以 **AGPL-3.0-or-later** 授权（见 [LICENSE](./LICENSE)）。
   - <https://github.com/Voxelum/x-minecraft-launcher>
   - <https://github.com/Voxelum/minecraft-launcher-core-node>（npm：`@xmcl/core`、`@xmcl/installer` 等）
 - **授权**：MIT
-- **状态**：当前版本不包含其代码；若以 npm 依赖引入或移植其代码，在此登记。
+- **使用情况**：
+  - `src/core/modloader/forgeInstaller.ts`（Forge/NeoForge 安装引擎）**流程与数据结构参考**其 `@xmcl/installer`（`forge.ts` / `profile.ts`）的公开实现——install_profile 解析、jar 内 maven 释放、BINPATCH 数据重写、processor 执行模型；为基于 VSCL 自有基建（minimalZip/downloader）的独立编写，非逐行复制
+  - 未以 npm 依赖形式引入其代码
 
 适用的 MIT 授权全文（亦见 [LICENSES/MIT.txt](./LICENSES/MIT.txt)）：
 

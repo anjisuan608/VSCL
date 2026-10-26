@@ -73,6 +73,22 @@
       {
         "command": "vscl.openPage.multiplayer",
         "title": "VSCL: 打开多人联机"
+      },
+      {
+        "command": "vscl.installModLoader",
+        "title": "VSCL: 安装 Fabric / Quilt 加载器"
+      },
+      {
+        "command": "vscl.openInstanceSettings",
+        "title": "VSCL: 打开实例设置"
+      },
+      {
+        "command": "vscl.account.manage",
+        "title": "VSCL: 账户管理（微软登录）"
+      },
+      {
+        "command": "vscl.installModpack",
+        "title": "VSCL: 安装整合包（mrpack）"
       }
     ],
     "configuration": {
@@ -118,6 +134,30 @@
           "scope": "machine",
           "description": "文件下载源",
           "default": "bmclapi"
+        },
+        "vscl.offlineUsername": {
+          "type": "string",
+          "scope": "machine",
+          "markdownDescription": "离线登录用户名（用于生成离线 UUID；微软账户登录功能开发中）。",
+          "default": "Steve"
+        },
+        "vscl.showLogs": {
+          "type": "boolean",
+          "scope": "machine",
+          "markdownDescription": "启动游戏时在终端区打开游戏日志终端。",
+          "default": true
+        },
+        "vscl.microsoftClientId": {
+          "type": "string",
+          "scope": "machine",
+          "markdownDescription": "微软登录用的 Azure Application 客户端 ID（公共客户端 / 移动与桌面）。在 [Azure 门户](https://portal.azure.com) 注册应用获取；留空则仅支持离线启动。",
+          "default": ""
+        },
+        "vscl.downloadThreads": {
+          "type": "number",
+          "scope": "machine",
+          "markdownDescription": "并发下载线程数（资源/库批量下载）。",
+          "default": 16
         },
         "vscl.game.minMemory": {
           "type": "number",

@@ -8,7 +8,11 @@
   let state = { instances: [] };
 
   function render() {
-    const { activeDirectory, activeSource, selected, instances } = state;
+    const { activeDirectory, activeSource, selected, instances, accountName } = state;
+
+    // 账户卡
+    $("#account-name").textContent = accountName || "未登录";
+    $("#account-sub").textContent = accountName ? "微软账户 · 点击管理" : "点击登录微软账户 / 管理";
 
     // 目录行
     $("#dir-path").textContent = activeDirectory || "（未检测到游戏目录）";
@@ -31,6 +35,7 @@
           ${selected.components.length ? selected.components.map((c) => `<span class="badge">${escapeHtml(c)}</span>`).join(" ") : '<span class="badge">原版</span>'}
           ${selected.javaMajor ? `<span class="badge">Java ${selected.javaMajor}</span>` : ""}
           ${selected.hasOverride ? '<span class="badge">已自定义</span>' : ""}
+          ${selected.running ? '<span class="badge">运行中</span>' : ""}
         </div>`;
     } else {
       card.innerHTML = `<div class="empty-hint">${instances.length ? "未选择实例，点击下方按钮切换" : "暂无实例：先安装游戏版本（下载中心开发中）"}</div>`;

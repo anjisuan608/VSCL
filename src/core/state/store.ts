@@ -38,13 +38,17 @@ export interface State {
   instances: InstanceInfo[];
   /** 当前选中实例 id */
   selectedInstanceId?: string;
+  /** 正在运行中的实例 id 列表 */
+  runningInstanceIds: string[];
+  /** 已登录的微软账户名（未登录为 undefined） */
+  accountName?: string;
 }
 
 /** 状态变更事件载荷 */
 export type StateChange = State;
 
 export class Store extends vscode.EventEmitter<StateChange> {
-  private _state: State = { instances: [] };
+  private _state: State = { instances: [], runningInstanceIds: [] };
 
   /** 当前状态快照（只读） */
   get state(): State {

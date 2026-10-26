@@ -52,6 +52,26 @@ export namespace Settings {
     };
   }
 
+  /** 离线登录用户名 */
+  export function offlineUsername(): string {
+    return cfg().get<string>("offlineUsername", "Steve");
+  }
+
+  /** 启动游戏时打开日志终端 */
+  export function showLogs(): boolean {
+    return cfg().get<boolean>("showLogs", true);
+  }
+
+  /** 下载并发数 */
+  export function downloadThreads(): number {
+    return cfg().get<number>("downloadThreads", 16);
+  }
+
+  /** 微软登录 Azure Application client_id（空 = 未配置） */
+  export function microsoftClientId(): string {
+    return cfg().get<string>("microsoftClientId", "").trim();
+  }
+
   /** 添加游戏目录到注册表（去重） */
   export async function addGameDirectory(dir: string): Promise<void> {
     const list = gameDirectories();

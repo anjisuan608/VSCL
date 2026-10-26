@@ -50,8 +50,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       data: {
         activeDirectory: s.activeDirectory,
         activeSource: s.activeSource,
-        selected: selected ? { ...selected, iconUri } : undefined,
+        selected: selected ? { ...selected, iconUri, running: s.runningInstanceIds.includes(selected.id) } : undefined,
         instances: s.instances,
+        accountName: s.accountName,
         latestJava: latestJava ? { major: latestJava.major, vendor: latestJava.vendor } : undefined,
       },
     });
@@ -79,7 +80,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             await vscode.commands.executeCommand("vscl.refresh");
             break;
           case "open-page":
-            await vscode.commands.executeCommand(`vscl.openPage.${msg.arg ?? "download"}`);
+            if (msg.arg === "instance-settings") {
+              await vscode.commands.executeCommand("vscl.openInstanceSettings");
+            } else {
+              await vscode.commands.executeCommand(`vscl.openPage.${msg.arg ?? "download"}`);
+            }
             break;
           default:
             break;
@@ -113,15 +118,15 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     <div class="account-card" data-cmd="open-page" data-arg="account" title="账户管理（开发中）">
       <div class="account-avatar"><span data-icon="person"></span></div>
       <div>
-        <div class="account-name">未登录</div>
-        <div class="account-sub">微软 / 离线 / 外置登录（开发中）</div>
+        <div class="account-name" id="account-name">未登录</div>
+        <div class="account-sub" id="account-sub">点击管理账户（微软 / 离线）</div>
       </div>
     </div>
   </div>
 
   <div class="section">
     <p class="section-title">游戏</p>
-    <div class="instance-card" id="instance-card"></div>
+    <div class="instance-card" id="instance-card" data-cmd="open-page" data-arg="instance-settings" title="打开实例设置（游戏设置 / Mod 管理）"></div>
     <div class="nav-item" data-cmd="open-page" data-arg="instances" title="实例列表（开发中）">
       <span class="nav-icon" data-icon="inventory"></span>
       <span class="nav-label">实例列表</span>
