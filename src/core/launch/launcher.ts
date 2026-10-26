@@ -11,14 +11,13 @@ import * as path from "path";
 import type { ArgumentEntry, MergedVersion, RawLibrary } from "./versionMerge";
 import { extractZip } from "../util/minimalZip";
 
-/** 规则匹配所需的上下文特征 */
+/** 规则匹配所需的上下文特征（含 Mojang 的 features 门控语义） */
 export interface RuleFeatures {
   os: "windows" | "osx" | "linux";
   arch: string; // process.arch
   is32: boolean;
-  quickPlay: boolean;
-  customResolution: boolean;
-  demo: boolean;
+  /** 特征门控（is_quick_play_* / has_custom_resolution / is_demo_user），缺省视为 false */
+  features: Record<string, boolean>;
 }
 
 /** 构建参数 */
@@ -70,8 +69,16 @@ export function currentOs(): RuleFeatures["os"] {
   }
 }
 
-/** 规则匹配（Mojang 语义：默认 disallow，逐条应用匹配的规则，最后一条匹配生效） */
-export function rulesAllow(rules: { os?: { name?: string; arch?: string }; action: string }[] | undefined, f: RuleFeatures): boolean {
+/**
+ * 规则匹配（Mojang 语义：默认 disallow，逐条应用匹配的规则，最后一条匹配生效）。
+ * os 与 features（is_quick_play_* / has_custom_resolution / is_demo_user）均须匹配——
+ * 缺 features 匹配会导致 --quickPlay* 等门控参数被全部注入（游戏报
+ * "Only one quick play option can be specified"）。
+ */
+export function rulesAllow(
+  rules: { os?: { name?: string; arch?: string }; features?: Record<string, boolean>; action: string }[] | undefined,
+  f: RuleFeatures
+): boolean {
   if (!rules || rules.length === 0) {
     return true;
   }
@@ -84,6 +91,14 @@ export function rulesAllow(rules: { os?: { name?: string; arch?: string }; actio
     if (match && rule.os?.arch) {
       if (rule.os.arch === "x86" !== f.is32) {
         match = false;
+      }
+    }
+    if (match && rule.features) {
+      for (const [key, want] of Object.entries(rule.features)) {
+        if ((f.features[key] ?? false) !== want) {
+          match = false;
+          break;
+        }
       }
     }
     if (match) {
@@ -206,9 +221,14 @@ export function buildLaunchCommand(req: BuildRequest): BuildResult {
     os: currentOs(),
     arch: process.arch,
     is32: process.arch === "ia32",
-    quickPlay: !!req.quickPlay,
-    customResolution: false,
-    demo: false,
+    features: {
+      is_demo_user: false,
+      has_custom_resolution: req.windowType === "WINDOWED" && !!req.width && !!req.height,
+      has_quick_plays_support: !!req.quickPlay,
+      is_quick_play_singleplayer: !!req.quickPlay,
+      is_quick_play_multiplayer: false,
+      is_quick_play_realms: false,
+    },
   };
 
   // —— classpath 与 natives ——

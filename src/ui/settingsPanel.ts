@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 VSCL contributors
 /**
- * 启动器设置页（编辑器区 WebviewPanel，替代原生设置界面；仅 vscl.useIntegratedBrowser
- * 保留在 VS Code 设置中）。分区：游戏目录 / 游戏（全局默认，HMCL 智能内存模型）/
- * 下载 / 账户 / 关于。样式复用 media/instancePanel.css。
- * 数据层不变：仍读写 VS Code 配置系统（vscl.*），仅展示层自建。
+ * 启动器设置页（编辑器区 WebviewPanel；与实例设置/账户页统一 shell 风格：
+ * 标题行 + 外置样式 media/instancePanel.css，无内联 <style>）。
+ * 分区：Java 管理（检测列表/设默认/获取引导）/ 游戏目录 / 游戏（全局默认，
+ * HMCL 智能内存模型）/ 下载 / 关于。仅 vscl.useIntegratedBrowser 与
+ * vscl.microsoftClientId 保留在 VS Code 原生设置中。
  */
 import * as vscode from "vscode";
 
@@ -16,6 +17,10 @@ export interface SettingsPanelState {
     registered: string[];
     official: string;
   };
+  /** 检测到的 Java 列表 */
+  javas: { exePath: string; major: number; version: string; vendor: string; source: string }[];
+  /** 当前默认 Java（vscl.javaPath，空 = 自动匹配） */
+  javaDefault: string;
   /** 智能内存模型：auto=填写值为下限；manual=填写值为上限 */
   memory: { autoMemory: boolean; minMemory: number; maxMemory: number };
   jvmArgs: string[];
@@ -35,6 +40,14 @@ export interface SettingsPanelCallbacks {
   activateDirectory(path: string): Promise<void>;
   removeDirectory(path: string): Promise<void>;
   resetAutoDirectory(): Promise<void>;
+  /** 重新检测 Java */
+  rescanJava(): void;
+  /** 将指定 Java 设为默认（写 vscl.javaPath） */
+  setJavaDefault(exePath: string): Promise<void>;
+  /** 清除默认（恢复自动匹配） */
+  clearJavaDefault(): Promise<void>;
+  /** 打开 Java 获取页面（java.com / BellSoft Liberica） */
+  openJavaDownload(kind: "java" | "bellsoft"): Promise<void>;
   /** 在 VS Code 原生设置中打开指定项 */
   openNativeSetting(query: string): Promise<void>;
 }
@@ -71,7 +84,7 @@ export class SettingsPanel {
     panel.onDidDispose(() => {
       SettingsPanel.current = undefined;
     });
-    panel.webview.onDidReceiveMessage(async (msg: { cmd?: string; key?: string; value?: unknown; path?: string; mode?: string; number?: number; query?: string }) => {
+    panel.webview.onDidReceiveMessage(async (msg: { cmd?: string; key?: string; value?: unknown; path?: string; mode?: string; number?: number; query?: string; kind?: string }) => {
       const self = SettingsPanel.current;
       if (!self) {
         return;
@@ -113,6 +126,23 @@ export class SettingsPanel {
             await self.callbacks.resetAutoDirectory();
             self.pushState();
             break;
+          case "rescanJava":
+            self.callbacks.rescanJava();
+            self.pushState();
+            break;
+          case "setJavaDefault":
+            if (msg.path) {
+              await self.callbacks.setJavaDefault(msg.path);
+              self.pushState();
+            }
+            break;
+          case "clearJavaDefault":
+            await self.callbacks.clearJavaDefault();
+            self.pushState();
+            break;
+          case "openJavaDownload":
+            await self.callbacks.openJavaDownload(msg.kind === "bellsoft" ? "bellsoft" : "java");
+            break;
           case "openNativeSetting":
             await self.callbacks.openNativeSetting(msg.query || "@ext:vscl.vscl");
             break;
@@ -150,7 +180,33 @@ export class SettingsPanel {
   <title>启动器设置</title>
 </head>
 <body>
-  <div class="page">
+  <div class="tabs" style="position: static; padding: 0 28px;">
+    <span class="tab active" data-stab="java">Java 管理</span>
+    <span class="tab" data-stab="dirs">游戏目录</span>
+    <span class="tab" data-stab="game">游戏</span>
+    <span class="tab" data-stab="download">下载</span>
+    <span class="tab" data-stab="about">关于</span>
+  </div>
+
+  <!-- Java 管理 -->
+  <div class="page" id="page-java">
+    <div class="section">
+      <div class="section-title">Java 管理</div>
+      <div class="section-desc">
+        检测本机 Java 运行时（PATH / JAVA_HOME / 各平台标准目录 / 注册表 / 官方启动器 runtime）。
+        启动与安装的默认 Java 在「游戏」Tab 中选择；游戏版本所需的 Java 版本仅为推荐值。
+      </div>
+      <div class="toolbar" style="padding: 8px 16px 0;">
+        <button class="tool secondary" data-cmd="rescanJava">重新检测</button>
+        <button class="tool secondary" data-cmd="openJavaDownload" data-kind="java">前往 java.com 下载</button>
+        <button class="tool secondary" data-cmd="openJavaDownload" data-kind="bellsoft">前往 BellSoft</button>
+      </div>
+      <div id="java-list"><div class="empty">检测中…</div></div>
+    </div>
+  </div>
+
+  <!-- 游戏目录 -->
+  <div class="page" id="page-dirs" hidden>
     <div class="section">
       <div class="section-title">游戏目录</div>
       <div class="section-desc" id="dir-current">检测中…</div>
@@ -162,7 +218,10 @@ export class SettingsPanel {
         </div>
       </div>
     </div>
+  </div>
 
+  <!-- 游戏（全局默认） -->
+  <div class="page" id="page-game" hidden>
     <div class="section">
       <div class="section-title">游戏（全局默认）</div>
       <div class="section-desc">所有未被实例覆盖的项继承此处设置（实例可在实例设置页单独覆盖）。</div>
@@ -174,7 +233,7 @@ export class SettingsPanel {
         <div class="row-control">
           <label class="override-toggle"><input type="checkbox" id="memory-auto"> 启用</label>
           <input type="number" id="memory-value" min="0" step="64">
-          <span class="row-suffix" id="memory-suffix">MB</span>
+          <span class="row-suffix">MB</span>
         </div>
       </div>
       <div class="row">
@@ -182,15 +241,23 @@ export class SettingsPanel {
         <div class="row-control"><textarea data-gkey="jvmArgs"></textarea></div>
       </div>
       <div class="row">
-        <div class="row-label"><div class="row-name">Java 路径</div><div class="row-hint">留空自动检测</div></div>
-        <div class="row-control"><input type="text" data-gkey="javaPath" placeholder="java 可执行文件完整路径"></div>
+        <div class="row-label">
+          <div class="row-name">Java 选择</div>
+          <div class="row-hint">启动与安装组件使用的默认 Java；实例可在实例设置中单独覆盖</div>
+        </div>
+        <div class="row-control">
+          <div id="java-picker" style="display:flex;flex-direction:column;gap:5px;flex:1;"></div>
+        </div>
       </div>
       <div class="row">
         <div class="row-label"><div class="row-name">启动时打开日志终端</div></div>
         <div class="row-control"><label class="override-toggle"><input type="checkbox" data-gkey="showLogs"> 启用</label></div>
       </div>
     </div>
+  </div>
 
+  <!-- 下载 -->
+  <div class="page" id="page-download" hidden>
     <div class="section">
       <div class="section-title">下载</div>
       <div class="row">
@@ -207,7 +274,10 @@ export class SettingsPanel {
         <div class="row-control"><input type="number" data-gkey="downloadThreads" min="1" max="64"></div>
       </div>
     </div>
+  </div>
 
+  <!-- 关于 -->
+  <div class="page" id="page-about" hidden>
     <div class="section">
       <div class="section-title">关于</div>
       <div class="section-desc">
@@ -224,16 +294,23 @@ export class SettingsPanel {
       return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     }
 
-    let lastState;
+    // Tab 切换（同实例设置页结构）
+    document.querySelectorAll('.tab[data-stab]').forEach((t) =>
+      t.addEventListener('click', () => {
+        document.querySelectorAll('.tab[data-stab]').forEach((x) => x.classList.toggle('active', x === t));
+        ['java', 'dirs', 'game', 'download', 'about'].forEach((p) => {
+          $('#page-' + p).hidden = t.dataset.stab !== p;
+        });
+      })
+    );
 
-    // 命令按钮
     document.body.addEventListener('click', (e) => {
       const el = e.target.closest('[data-cmd]');
       if (!el) return;
-      vscode.postMessage({ cmd: el.dataset.cmd, path: el.dataset.path, query: el.dataset.query });
+      vscode.postMessage({ cmd: el.dataset.cmd, path: el.dataset.path, kind: el.dataset.kind, query: el.dataset.query });
     });
 
-    // 智能内存：模式切换联动说明文案；提交三键
+    // 智能内存（HMCL 模型）
     function renderMemory(state) {
       const auto = state.memory.autoMemory;
       $('#memory-auto').checked = auto;
@@ -242,20 +319,13 @@ export class SettingsPanel {
         ? '启用：填写值为下限，上限按系统内存自动分配（不低于此值）'
         : '禁用：填写值为固定上限（-Xmx）';
     }
-    $('#memory-auto').addEventListener('change', () => {
+    function postMemory() {
       vscode.postMessage({ cmd: 'setMemory', mode: $('#memory-auto').checked ? 'auto' : 'manual', number: Number($('#memory-value').value || 0) });
-    });
-    $('#memory-value').addEventListener('change', () => {
-      vscode.postMessage({ cmd: 'setMemory', mode: $('#memory-auto').checked ? 'auto' : 'manual', number: Number($('#memory-value').value || 0) });
-    });
+    }
+    $('#memory-auto').addEventListener('change', postMemory);
+    $('#memory-value').addEventListener('change', postMemory);
 
-    // 其它全局字段
-    const GLOBAL_TEXT = ['javaPath'];
-    GLOBAL_TEXT.forEach((k) => {
-      $('[data-gkey="' + k + '"]').addEventListener('change', (e) => {
-        vscode.postMessage({ cmd: 'setGlobal', key: k, value: e.target.value });
-      });
-    });
+    // 其余全局字段（javaPath 由 Java 单选列表处理）
     $('[data-gkey="jvmArgs"]').addEventListener('change', (e) => {
       vscode.postMessage({ cmd: 'setGlobal', key: 'jvmArgs', value: String(e.target.value).split('\\n').filter(Boolean) });
     });
@@ -269,12 +339,57 @@ export class SettingsPanel {
       vscode.postMessage({ cmd: 'setGlobal', key: 'downloadThreads', value: Number(e.target.value || 16) });
     });
 
+    // Java 列表（只读展示；选择在「游戏」Tab）
+    const JAVA_SOURCE = { manual: '手动', java_home: 'JAVA_HOME', jdk_home: 'JDK_HOME', path: 'PATH', registry: '注册表', platform: '自动扫描' };
+    function renderJavas(state) {
+      const javas = state.javas || [];
+      if (javas.length === 0) {
+        $('#java-list').innerHTML = '<div class="empty">未检测到 Java —— 可前往 java.com / BellSoft 下载，或安装 Language Support for Java (Red Hat) 获取内置运行时</div>';
+        return;
+      }
+      $('#java-list').innerHTML = javas.map((j) =>
+        '<div class="list-row">'
+        + '<span class="list-name">Java ' + j.major + '　<span class="list-meta">' + esc(j.version) + '</span></span>'
+        + '<span class="badge">' + esc(j.vendor || '未知') + '</span>'
+        + '<span class="badge">' + esc(JAVA_SOURCE[j.source] || j.source) + '</span>'
+        + '<span class="list-meta" title="' + esc(j.exePath) + '">' + esc(j.exePath.length > 48 ? '…' + j.exePath.slice(-47) : j.exePath) + '</span>'
+        + '</div>'
+      ).join('');
+    }
+
+    // 游戏 Tab：Java 单选列表（自动 / 各检测 Java / 自定义路径）
+    function renderJavaPicker(state) {
+      const javas = state.javas || [];
+      const cur = state.javaDefault || '';
+      const isCustom = cur !== '' && !javas.some((j) => j.exePath === cur);
+      $('#java-picker').innerHTML =
+        '<label class="override-toggle" style="cursor:pointer;"><input type="radio" name="gjava" data-java="" ' + (cur === '' ? 'checked' : '') + '> 自动（按游戏版本匹配）</label>'
+        + javas.map((j) =>
+          '<label class="override-toggle" style="cursor:pointer;display:flex;gap:6px;align-items:center;min-width:0;">'
+          + '<input type="radio" name="gjava" data-java="' + esc(j.exePath) + '" ' + (cur === j.exePath ? 'checked' : '') + '>'
+          + 'Java ' + j.major + ' · ' + esc(j.vendor || '未知')
+          + '<span class="row-hint" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(j.exePath) + '</span></label>'
+        ).join('')
+        + '<label class="override-toggle" style="cursor:pointer;display:flex;gap:6px;align-items:center;">'
+        + '<input type="radio" name="gjava" data-java="__custom__" ' + (isCustom ? 'checked' : '') + '> 自定义路径：'
+        + '<input type="text" id="java-custom" value="' + esc(isCustom ? cur : '') + '" style="flex:1;" placeholder="java 可执行文件完整路径"></label>';
+      $('#java-picker').querySelectorAll('input[name="gjava"]').forEach((r) => {
+        r.addEventListener('change', () => {
+          let v = r.dataset.java;
+          if (v === '__custom__') {
+            v = String($('#java-custom').value || '').trim();
+            if (!v) { return; }
+          }
+          vscode.postMessage({ cmd: 'setGlobal', key: 'javaPath', value: v });
+        });
+      });
+    }
+
     function renderDirs(state) {
       const d = state.directory;
       const sourceLabel = { workspace: '工作区', registered: '注册目录', official: '官方启动器目录' }[d.source] || d.source || '';
       $('#dir-current').innerHTML = '当前：<code>' + esc(d.active || '（未检测到）') + '</code>　<span class="badge">' + esc(sourceLabel) + '</span>';
-      const rows = [];
-      rows.push('<div class="list-row"><span class="list-name">官方启动器目录</span><span class="list-meta">' + esc(d.official) + '</span></div>');
+      const rows = ['<div class="list-row"><span class="list-name">官方启动器目录</span><span class="list-meta">' + esc(d.official) + '</span></div>'];
       for (const dir of d.registered) {
         const isActive = dir === d.active;
         rows.push('<div class="list-row">'
@@ -289,15 +404,15 @@ export class SettingsPanel {
     window.addEventListener('message', (e) => {
       const msg = e.data;
       if (!msg || msg.type !== 'state') return;
-      lastState = msg.data;
       renderMemory(msg.data);
+      renderJavas(msg.data);
+      renderJavaPicker(msg.data);
+      renderDirs(msg.data);
       $('[data-gkey="jvmArgs"]').value = (msg.data.jvmArgs || []).join('\\n');
-      $('[data-gkey="javaPath"]').value = msg.data.javaPath || '';
       $('[data-gkey="showLogs"]').checked = !!msg.data.showLogs;
       $('[data-gkey="downloadSource"]').value = msg.data.downloadSource || 'bmclapi';
       $('[data-gkey="downloadThreads"]').value = msg.data.downloadThreads || 16;
       $('#ext-version').textContent = msg.data.extensionVersion || '';
-      renderDirs(msg.data);
     });
 
     vscode.postMessage({ cmd: 'ready' });

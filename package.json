@@ -101,13 +101,13 @@
         "vscl.useIntegratedBrowser": {
           "type": "boolean",
           "scope": "machine",
-          "markdownDescription": "是否使用 VS Code 内置浏览器（Simple Browser）打开链接。账户登录等敏感链接始终使用系统浏览器。**其余 VSCL 设置在扩展自有设置页中配置**（侧栏「设置」）。",
+          "markdownDescription": "是否使用 VS Code 内置浏览器（Simple Browser）打开链接。账户登录等敏感链接始终使用系统浏览器。",
           "default": false
         },
         "vscl.microsoftClientId": {
           "type": "string",
           "scope": "machine",
-          "markdownDescription": "微软登录用的 Azure Application 客户端 ID（公共客户端 / 移动与桌面）。在 [Azure 门户](https://portal.azure.com) 注册应用获取；留空则仅支持离线启动。",
+          "markdownDescription": "微软登录用的 Azure Application 客户端 ID。在 [Azure 门户](https://portal.azure.com) 注册应用获取；留空则仅支持离线启动。",
           "default": ""
         }
       }

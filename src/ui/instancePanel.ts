@@ -20,7 +20,7 @@ export interface InstancePanelState {
         running: boolean;
       }
     | undefined;
-  /** 全局参考值（展示"跟随全局"提示用） */
+  /** 全局参考值（展示"跟随全局"提示 + Java 单选列表用） */
   global: {
     minMemory: number;
     maxMemory: number;
@@ -29,6 +29,8 @@ export interface InstancePanelState {
     downloadSource: string;
     downloadThreads: number;
     showLogs: boolean;
+    /** 已检测 Java（javaPicker 单选列表） */
+    javas: { exePath: string; major: number; vendor: string; source: string }[];
   };
   overrides: Record<string, unknown>;
   mods: {
@@ -56,8 +58,6 @@ export interface InstancePanelCallbacks {
   installLoader(): Promise<void>;
   setOverride(key: string, value: unknown): Promise<void>;
   resetOverride(key: string): Promise<void>;
-  /** 更新全局设置（key 为面板字段名，由扩展映射到 vscl.* 配置项） */
-  setGlobal(key: string, value: unknown): Promise<void>;
 }
 
 export class InstancePanel {
@@ -126,12 +126,6 @@ export class InstancePanel {
           case "resetOverride":
             if (msg.key) {
               await self.callbacks.resetOverride(msg.key);
-              self.pushState();
-            }
-            break;
-          case "setGlobal":
-            if (msg.key) {
-              await self.callbacks.setGlobal(msg.key, msg.value);
               self.pushState();
             }
             break;
@@ -296,12 +290,8 @@ const INSTANCE_PANEL_SCRIPT = `(function () {
   // ── 游戏设置字段定义（HMCL GameSettingsPage 对齐；全部写入实例覆盖 vsclversion.json） ──
   const SECTIONS = [
     {
-      title: 'Java', desc: '留空自动匹配所需版本；自定义路径优先级最高。',
-      fields: [
-        { key: 'javaType', label: 'Java 选择策略', type: 'select', options: [['', '自动（按游戏版本）'], ['DETECTED', '指定版本'], ['CUSTOM', '自定义路径']] },
-        { key: 'customJavaVersion', label: '指定 Java 版本', type: 'text', placeholder: '如 8 / 17 / 21 / 25' },
-        { key: 'customJavaPath', label: '自定义 Java 路径', type: 'text', placeholder: 'java 可执行文件完整路径' },
-      ],
+      title: 'Java', desc: '点选即覆盖（未覆盖时继承全局选择）；「自动」按游戏版本匹配。',
+      fields: [{ key: 'javaPath', label: 'Java 选择', type: 'javaPicker' }],
     },
     {
       title: '内存', desc: '智能内存启用时填写值为下限（自动分配不低于此值）；禁用时填写值为固定上限。留空继承全局设置。',
@@ -354,7 +344,17 @@ const INSTANCE_PANEL_SCRIPT = `(function () {
         const overridden = has(f.key);
         const val = overridden ? ov[f.key] : undefined;
         let control = '';
-        if (f.type === 'select') {
+        if (f.type === 'javaPicker') {
+          const javas = (state.global && state.global.javas) || [];
+          const cur = overridden ? String(val ?? '') : '';
+          const isCustom = cur !== '' && !javas.some((j) => j.exePath === cur);
+          const dis = overridden ? '' : 'opacity:.45;pointer-events:none;';
+          control = '<div style="display:flex;flex-direction:column;gap:5px;' + dis + '">'
+            + '<label style="display:flex;gap:8px;align-items:center;cursor:pointer;"><input type="radio" name="jp-' + f.key + '" data-key="' + f.key + '" value="" ' + (cur === '' ? 'checked' : '') + '> 自动（按游戏版本匹配）</label>'
+            + javas.map((j) => '<label style="display:flex;gap:8px;align-items:center;cursor:pointer;min-width:0;"><input type="radio" name="jp-' + f.key + '" data-key="' + f.key + '" value="' + esc(j.exePath) + '" ' + (cur === j.exePath ? 'checked' : '') + '> Java ' + j.major + ' · ' + esc(j.vendor || '未知') + ' <span class="row-hint" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(j.exePath) + '</span></label>').join('')
+            + '<label style="display:flex;gap:8px;align-items:center;cursor:pointer;"><input type="radio" name="jp-' + f.key + '" data-key="' + f.key + '" value="__custom__" ' + (isCustom ? 'checked' : '') + '> 自定义路径：<input type="text" data-custom="' + f.key + '" value="' + esc(isCustom ? cur : '') + '" style="flex:1;" placeholder="java 可执行文件完整路径"></label>'
+            + '</div>';
+        } else if (f.type === 'select') {
           const cur = overridden ? String(val ?? '') : '';
           control = '<select data-key="' + f.key + '" ' + (overridden ? '' : 'disabled') + '>'
             + f.options.map(([v, t]) => '<option value="' + esc(v) + '"' + (v === cur ? ' selected' : '') + '>' + esc(t) + '</option>').join('')
@@ -398,8 +398,15 @@ const INSTANCE_PANEL_SCRIPT = `(function () {
     $('#settings-form').querySelectorAll('[data-key]').forEach((input) => {
       input.addEventListener('change', () => {
         const key = input.dataset.key;
-        if (!input.closest('.row-control').querySelector('[data-override="' + key + '"]').checked) return;
-        vscode.postMessage({ cmd: 'setOverride', key, value: coerce(key, input) });
+        const toggle = input.closest('.row-control').querySelector('[data-override="' + key + '"]');
+        if (toggle && !toggle.checked) return;
+        const field = FIELDS.find((f) => f.key === key);
+        let value = coerce(key, input);
+        if (field && field.type === 'javaPicker' && input.value === '__custom__') {
+          const custom = $('#settings-form').querySelector('[data-custom="' + key + '"]');
+          value = String(custom ? custom.value : '').trim();
+        }
+        vscode.postMessage({ cmd: 'setOverride', key, value });
       });
     });
   }

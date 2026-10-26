@@ -76,10 +76,18 @@ export function readJson(gameDir: string, versionId: string): DetailedVersionJso
   }
 }
 
-/** libraries 去重键：group:artifact（classifier 属于下载细节，主体坐标优先） */
+/**
+ * libraries 去重键：`group:artifact[:classifier]`（不含版本——同坐标的子版本覆盖父版本）。
+ * 必须保留 classifier 维度：Mojang 1.19+ 的 LWJGL 等库在同一 artifact 下
+ * 同时声明主库与 `natives-<os>` classifier 条目，若按 group:artifact 去重
+ * 会把主库覆盖丢失（NoClassDefFoundError: org/lwjgl/...）。
+ */
 function libKey(lib: RawLibrary): string {
   const parts = (lib.name ?? "").split(":");
-  return parts.length >= 2 ? `${parts[0]}:${parts[1]}` : lib.name ?? "";
+  if (parts.length < 2) {
+    return lib.name ?? "";
+  }
+  return `${parts[0]}:${parts[1]}:${parts[3] ?? ""}`;
 }
 
 /** 沿继承链合并（深度防环） */

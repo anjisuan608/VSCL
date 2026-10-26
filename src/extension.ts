@@ -9,6 +9,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
 import { Settings } from "./config/settings";
+import { ConfigStore, VsclSettings } from "./core/configStore";
 import { Store } from "./core/state/store";
 import { resolveActiveDirectory, officialGameDirectory, isSameDirectory } from "./core/game/gameDirectory";
 import { scanInstances } from "./core/game/instance";
@@ -34,6 +35,7 @@ import { SidebarProvider } from "./ui/sidebar";
 import { listMods, setModEnabled, deleteMod, modsDirOf } from "./core/mod/modManager";
 import { fetchLoaderVersions, installFabricLike, FabricLike } from "./core/modloader/fabricFamily";
 import { fetchForgeFamilyVersions, installForgeFamily, ForgeFamily } from "./core/modloader/forgeInstaller";
+import { fetchOptiFineVersions, installOptiFine } from "./core/modloader/optiFine";
 import { spawnSync } from "child_process";
 
 const SELECTED_INSTANCE_KEY = "vscl.selectedInstance";
@@ -56,6 +58,10 @@ function instanceIconPath(
 
 /** 扩展激活入口 */
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  // 自管配置存储（globalStorage/settings.json；原生设置仅保留 useIntegratedBrowser / microsoftClientId）
+  const configStore = new ConfigStore(path.join(context.globalStorageUri.fsPath, "settings.json"));
+  Settings.bind(configStore);
+
   const store = new Store();
   let latestJava: JavaInstall | undefined;
 
@@ -80,6 +86,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       selectedInstanceId: selected,
     });
     sidebar.postState(latestJava);
+
+    // 空实例引导（仅一次）：多半是游戏目录未注册
+    if (
+      instances.length === 0 &&
+      !context.globalState.get<boolean>("vscl.noInstanceHinted")
+    ) {
+      await context.globalState.update("vscl.noInstanceHinted", true);
+      const choice = await vscode.window.showInformationMessage(
+        "VSCL：当前游戏目录没有任何实例。若你的游戏在其他目录，请添加游戏目录。",
+        "添加游戏目录"
+      );
+      if (choice === "添加游戏目录") {
+        await addDirectoryDialog();
+      }
+    }
   }
 
   /** 启动选中实例：Java 匹配 → 版本合并 → 命令构建 → 日志终端 + spawn */
@@ -103,7 +124,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const overrides = loadOverrides(instance.dir);
     const eff = effectiveSettings(Settings.globalGameSettings(), overrides);
 
-    // —— Java 选择：实例覆盖 > 全局设置 > 按版本需求自动匹配 ——
+    // —— Java 选择：实例覆盖 > 全局设置 > 按版本需求自动匹配（缓存） ——
     let javaExe: string | undefined;
     let javaSource = "";
     const manual = overrides.javaPath || Settings.javaPath() || undefined;
@@ -114,20 +135,35 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           : manual;
       javaSource = "手动指定";
     } else {
-      const cand = detectJava().find((j) => javaSatisfies(j.major, instance.javaMajor));
+      // Java 版本为推荐值而非强制：优先满足版本需求；无满足项时降级用最高版本启动并警告
+      const javas = javasCache.length > 0 ? javasCache : detectJava();
+      const required = instance.javaMajor;
+      const matched = javas.find((j) => javaSatisfies(j.major, required));
+      const cand = matched ?? javas[0];
       if (cand) {
         javaExe = cand.exePath === "java" ? "java" : cand.exePath;
         javaSource = cand.vendor || cand.source;
+        if (!matched && required) {
+          void vscode.window.showWarningMessage(
+            `VSCL：本机没有满足「${instance.id}」推荐的 Java ${required}，将使用 Java ${cand.major} 启动（可能无法正常运行游戏）。`
+          );
+        }
       }
     }
-    if (!javaExe || (javaExe !== "java" && !fs.existsSync(javaExe))) {
-      const required = instance.javaMajor ? `Java ${instance.javaMajor}` : "匹配的 Java";
+      // 裸命令名（PATH 查找）不算文件路径，无需 existsSync 校验
+      const isBare = javaExe === "java" || javaExe === "java.exe";
+      if (!javaExe || (!isBare && !fs.existsSync(javaExe))) {
+      const javasNow = javasCache.length > 0 ? javasCache : detectJava();
       const choice = await vscode.window.showErrorMessage(
-        `VSCL：未找到满足「${instance.id}」的运行时（${required}）。`,
-        "检测/获取 Java"
+        `VSCL：未找到可用的 Java 运行时（诊断：manual=${manual ?? "空"}，缓存=${javasCache.length}，现场检测=${javasNow.length}）。`,
+        "打开 Java 管理",
+        "前往 java.com 下载"
       );
-      if (choice) {
-        void vscode.commands.executeCommand("vscl.detectJava");
+      if (choice === "打开 Java 管理") {
+        void vscode.commands.executeCommand("vscl.openLauncherSettings");
+      } else if (choice === "前往 java.com 下载") {
+        const { openLink } = await import("./core/util/link");
+        await openLink("https://www.java.com/zh-CN/download/");
       }
       return;
     }
@@ -514,6 +550,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         downloadSource: Settings.downloadSource(),
         downloadThreads: Settings.downloadThreads(),
         showLogs: Settings.showLogs(),
+        javas: (javasCache.length > 0 ? javasCache : detectJava()).map((j) => ({
+          exePath: j.exePath,
+          major: j.major,
+          vendor: j.vendor,
+          source: j.source,
+        })),
       },
       overrides,
       mods,
@@ -528,20 +570,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return instance ? listMods(instance.dir).find((m) => m.path === filePath) : undefined;
   }
 
-  /** 全局设置字段 → vscl.* 配置项映射 */
-  const GLOBAL_SETTING_KEYS: Record<string, string> = {
-    minMemory: "game.minMemory",
-    maxMemory: "game.maxMemory",
-    jvmArgs: "game.jvmArgs",
-    javaPath: "javaPath",
-    downloadSource: "downloadSource",
-    downloadThreads: "downloadThreads",
-    showLogs: "showLogs",
-    useIntegratedBrowser: "useIntegratedBrowser",
-  };
-
   /** 打开实例设置面板（命令/侧栏实例卡入口） */
-  function openInstanceSettings(): void {    InstancePanel.createOrShow(context, {
+  function openInstanceSettings(): void {
+    InstancePanel.createOrShow(context, {
       getState: instancePanelState,
       toggleMod: async (p) => {
         const entry = findModByPath(p);
@@ -583,18 +614,48 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           resetOverride(instance.dir, k as OverrideKey);
         }
       },
-      setGlobal: async (k, v) => {
-        const configKey = GLOBAL_SETTING_KEYS[k];
-        if (configKey) {
-          await vscode.workspace.getConfiguration("vscl").update(configKey, v, vscode.ConfigurationTarget.Global);
-        }
-      },
     });
   }
 
-  /** 启动器设置页状态快照（目录/内存/下载/账户） */
+  /** 已检测 Java 缓存（设置页列表 / 安装选择共用） */
+  let javasCache: JavaInstall[] = [];
+
+  /** 重新扫描 Java */
+  function scanJavas(): JavaInstall[] {
+    javasCache = detectJava(Settings.javaPath() || undefined);
+    return javasCache;
+  }
+  scanJavas(); // 激活同步段立即预热（命令注册前完成，杜绝启动时缓存为空的时序窗口）
+
+  /** 为安装/启动解析可用 Java（手动设置 > 版本匹配） */
+  function resolveJavaFor(required?: number): string | undefined {
+    const manual = Settings.javaPath() || undefined;
+    if (manual) {
+      return manual;
+    }
+    return (javasCache.length > 0 ? javasCache : detectJava()).find((j) => javaSatisfies(j.major, required))?.exePath;
+  }
+
+  /** 添加游戏目录（对话框 → 注册并激活 → 刷新） */
+  async function addDirectoryDialog(): Promise<void> {
+    const uris = await vscode.window.showOpenDialog({
+      canSelectFolders: true,
+      canSelectFiles: false,
+      canSelectMany: false,
+      openLabel: "添加为游戏目录",
+    });
+    const dir = uris?.[0]?.fsPath;
+    if (dir) {
+      Settings.addGameDirectory(dir);
+      Settings.setActiveGameDirectory(dir);
+      await refresh();
+    }
+  }
+
+  /** 启动器设置页状态快照（Java/目录/内存/下载） */
   function settingsPanelState(): SettingsPanelState {
     const g = Settings.globalGameSettings();
+    const javas = javasCache.length > 0 ? javasCache : detectJava();
     return {
       directory: {
         active: store.state.activeDirectory,
@@ -602,6 +663,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         registered: Settings.gameDirectories(),
         official: officialGameDirectory(),
       },
+      javas: javas.map((j) => ({ exePath: j.exePath, major: j.major, version: j.version, vendor: j.vendor, source: j.source })),
+      javaDefault: Settings.javaPath(),
       memory: { autoMemory: g.autoMemory, minMemory: g.minMemory, maxMemory: g.maxMemory },
       jvmArgs: g.jvmArgs,
       javaPath: Settings.javaPath(),
@@ -617,30 +680,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     SettingsPanel.createOrShow(context, {
       getState: settingsPanelState,
       setGlobal: async (k, v) => {
-        const configKey = GLOBAL_SETTING_KEYS[k];
-        if (configKey) {
-          await vscode.workspace.getConfiguration("vscl").update(configKey, v, vscode.ConfigurationTarget.Global);
-        }
+        // 自管存储字段直接落盘（key 与 VsclSettings 字段同名）
+        configStore.update(k as keyof VsclSettings, v as never);
       },
       setMemory: async (mode, value) => {
-        const cfg = vscode.workspace.getConfiguration("vscl");
-        await cfg.update("game.autoMemory", mode === "auto", vscode.ConfigurationTarget.Global);
-        await cfg.update(mode === "auto" ? "game.minMemory" : "game.maxMemory", value, vscode.ConfigurationTarget.Global);
-      },
-      addDirectory: async () => {
-        const uris = await vscode.window.showOpenDialog({
-          canSelectFolders: true,
-          canSelectFiles: false,
-          canSelectMany: false,
-          openLabel: "添加为游戏目录",
-        });
-        const dir = uris?.[0]?.fsPath;
-        if (dir) {
-          await Settings.addGameDirectory(dir);
-          await Settings.setActiveGameDirectory(dir);
-          await refresh();
+        if (mode === "auto") {
+          configStore.update("autoMemory", true);
+          configStore.update("minMemory", value);
+        } else {
+          configStore.update("autoMemory", false);
+          configStore.update("maxMemory", value);
         }
       },
+      addDirectory: () => addDirectoryDialog(),
       activateDirectory: async (p) => {
         await Settings.setActiveGameDirectory(p);
         await refresh();
@@ -655,6 +707,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       resetAutoDirectory: async () => {
         await Settings.setActiveGameDirectory("");
         await refresh();
+      },
+      rescanJava: () => {
+        scanJavas();
+      },
+      setJavaDefault: async (exePath) => {
+        Settings.setJavaPath(exePath);
+        scanJavas();
+      },
+      clearJavaDefault: async () => {
+        Settings.setJavaPath("");
+        scanJavas();
+      },
+      openJavaDownload: async (kind) => {
+        const { openLink } = await import("./core/util/link");
+        await openLink(kind === "bellsoft" ? "https://bell-sw.com/pages/downloads/" : "https://www.java.com/zh-CN/download/");
       },
       openNativeSetting: async (query) => {
         await vscode.commands.executeCommand("workbench.action.openSettings", query);
@@ -685,10 +752,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
     const kindPick = await vscode.window.showQuickPick(
       [
-        { label: "Fabric", description: "轻量加载器", loader: "fabric" as FabricLike | ForgeFamily },
-        { label: "Quilt", description: "Fabric 社区分支", loader: "quilt" as FabricLike | ForgeFamily },
-        { label: "Forge", description: "经典加载器（需要 Java 执行后处理）", loader: "forge" as FabricLike | ForgeFamily },
-        { label: "NeoForge", description: "Forge 社区分支（需要 Java 执行后处理）", loader: "neoforge" as FabricLike | ForgeFamily },
+        { label: "Fabric", description: "轻量加载器", loader: "fabric" as const },
+        { label: "Quilt", description: "Fabric 社区分支", loader: "quilt" as const },
+        { label: "Forge", description: "经典加载器（需要 Java 执行后处理）", loader: "forge" as const },
+        { label: "NeoForge", description: "Forge 社区分支（需要 Java 执行后处理）", loader: "neoforge" as const },
+        { label: "OptiFine", description: "画质优化（BMCLAPI 下载；新版需 Java 补丁）", loader: "optifine" as const },
       ],
       { placeHolder: "选择加载器" }
     );
@@ -698,12 +766,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const source = Settings.downloadSource();
     try {
       // 版本列表
-      let versions: { version: string; stable: boolean }[];
+      let versions: { version: string; stable: boolean; optiFine?: Parameters<typeof installOptiFine>[0]["version"] }[];
       if (kindPick.loader === "forge" || kindPick.loader === "neoforge") {
         const all = await fetchForgeFamilyVersions(kindPick.loader, source);
         versions = kindPick.loader === "forge" ? all.filter((v) => v.version.startsWith(`${instance.id}-`)) : all;
         if (versions.length === 0 && kindPick.loader === "forge") {
           void vscode.window.showWarningMessage(`VSCL：Forge 未提供「${instance.id}」的版本，请选择更早/更晚的基础实例。`);
+          return;
+        }
+      } else if (kindPick.loader === "optifine") {
+        const all = await fetchOptiFineVersions();
+        versions = all
+          .filter((v) => v.mcversion === instance.id || instance.id.startsWith(`${v.mcversion}-`))
+          .map((v) => ({ version: v.id, stable: true, optiFine: v }));
+        if (versions.length === 0) {
+          void vscode.window.showWarningMessage(`VSCL：OptiFine 未提供「${instance.id}」对应版本。`);
           return;
         }
       } else {
@@ -714,19 +791,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           label: v.version,
           description: v.stable ? "稳定版" : "开发版",
           version: v.version,
+          optiFine: v.optiFine,
         })),
         { placeHolder: `选择 ${kindPick.label} 版本`, matchOnDescription: true }
       );
       if (!pick) {
         return;
       }
-      // Forge/NeoForge 的后处理需要 Java
+      // Forge/NeoForge 后处理与 OptiFine Patcher 需要 Java（尽力解析）
       let javaExe = "java";
-      if (kindPick.loader === "forge" || kindPick.loader === "neoforge") {
-        const manual = Settings.javaPath() || undefined;
-        const cand = manual ?? detectJava().find((j) => javaSatisfies(j.major, instance.javaMajor))?.exePath;
+      if (kindPick.loader !== "fabric" && kindPick.loader !== "quilt") {
+        const cand = resolveJavaFor(instance.javaMajor);
         if (!cand) {
-          void vscode.window.showErrorMessage("VSCL：安装 Forge/NeoForge 需要本机 Java，请先配置 vscl.javaPath 或安装 Java。");
+          void vscode.window.showErrorMessage("VSCL：该安装需要本机 Java，请先在启动器设置中配置。");
           return;
         }
         javaExe = cand;
@@ -745,8 +822,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
               source,
             });
           }
+          if (kindPick.loader === "optifine" && pick.optiFine) {
+            return installOptiFine({
+              gameDir,
+              baseInstanceId: instance.id,
+              version: pick.optiFine,
+              javaExe,
+              threads: Settings.downloadThreads(),
+              onProgress: (m) => progress.report({ message: m }),
+            });
+          }
           return installForgeFamily({
-            kind: kindPick.loader,
+            kind: kindPick.loader === "forge" ? "forge" : "neoforge",
             gameDir,
             gameVersion: instance.id,
             version: pick.version,
@@ -876,16 +963,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("vscl.installModpack", () => void installModpackCommand())
   );
 
-  // 首次激活：解析目录与实例、加载账户列表
+  // 首次激活：解析目录与实例、加载账户列表、预热 Java 缓存
   await refresh();
   await refreshAccounts();
+  scanJavas();
 
-  // 监听设置变化：游戏目录注册表/激活目录变更后自动刷新
+  // 自管设置变更：目录相关 → 重扫实例；设置页 → 刷新
   context.subscriptions.push(
-    vscode.workspace.onDidChangeConfiguration((e) => {
-      if (e.affectsConfiguration("vscl.gameDirectories") || e.affectsConfiguration("vscl.activeGameDirectory")) {
-        void refresh();
-      }
+    Settings.onDidChange(() => {
+      SettingsPanel.current?.refresh();
+      void refresh();
     })
   );
 }
