@@ -189,19 +189,47 @@ export class InstallNewPanel {
 
     const COMPS = [
       { id: 'minecraft', name: 'Minecraft', hint: '游戏本体（必选）' },
-      { id: 'forge', name: 'Forge', hint: '经典加载器' },
-      { id: 'neoforge', name: 'NeoForge', hint: 'Forge 社区分支' },
-      { id: 'cleanroom', name: 'Cleanroom', hint: 'Forge 系实验分支' },
-      { id: 'fabric', name: 'Fabric', hint: '轻量加载器' },
-      { id: 'legacyfabric', name: 'Legacy Fabric', hint: '旧版本 Fabric' },
-      { id: 'quilt', name: 'Quilt', hint: 'Fabric 社区分支' },
-      { id: 'optifine', name: 'OptiFine', hint: '画质优化（可叠加于加载器之上）' },
+      { id: 'forge', name: 'Forge' },
+      { id: 'neoforge', name: 'NeoForge' },
+      { id: 'cleanroom', name: 'Cleanroom' },
+      { id: 'fabric', name: 'Fabric' },
+      { id: 'legacyfabric', name: 'Legacy Fabric' },
+      { id: 'quilt', name: 'Quilt' },
+      { id: 'liteloader', name: 'LiteLoader' },
+      { id: 'optifine', name: 'OptiFine' },
     ];
-    const LOADERS = ['forge', 'neoforge', 'cleanroom', 'fabric', 'legacyfabric', 'quilt'];
+    const NAME = Object.fromEntries(COMPS.map((c) => [c.id, c.name]));
+    // 互斥加载器组（至多选一个）；LiteLoader/OptiFine 可单独、可叠加于 Forge
+    const MUTEX = ['forge', 'neoforge', 'cleanroom', 'fabric', 'legacyfabric', 'quilt'];
+    // 默认命名优先级（LiteLoader 高于 Forge：LL+OF → version-LiteLoader）
+    const NAME_PRIORITY = ['liteloader', 'forge', 'neoforge', 'cleanroom', 'fabric', 'quilt', 'legacyfabric'];
     let plan = {};
     let pickComponent = null;   // 当前子页组件
     let versions = [];          // 子页版本数据
     let downloading = false;
+
+    /** 组件不可选原因（null = 可选） */
+    function compatOf(comp) {
+      if (comp === 'minecraft') return null;
+      if (!plan.minecraft) return '请先选择 Minecraft 版本';
+      const pickedMutex = MUTEX.find((l) => plan[l]);
+      if (MUTEX.includes(comp)) {
+        return pickedMutex && pickedMutex !== comp ? '与 ' + NAME[pickedMutex] + ' 不兼容' : null;
+      }
+      // liteloader / optifine：可单独；仅可与 Forge 叠加
+      if (pickedMutex && pickedMutex !== 'forge') return '仅支持与 Forge 同时安装';
+      return null;
+    }
+
+    /** 默认客户端名称（version-loader；OF 叠加时以主加载器为准） */
+    function defaultName() {
+      const mc = plan.minecraft;
+      if (!mc) return '';
+      const primary = NAME_PRIORITY.find((l) => plan[l]);
+      if (primary) return mc + '-' + NAME[primary];
+      if (plan.optifine) return mc + '-OptiFine';
+      return mc;
+    }
 
     function show(view) {
       $('#view-main').hidden = view !== 'main';
@@ -209,31 +237,27 @@ export class InstallNewPanel {
     }
 
     function renderMain() {
-      const mc = plan.minecraft;
-      const chosenLoader = LOADERS.find((l) => plan[l]);
       $('#comp-list').innerHTML = COMPS.map((c) => {
         const picked = plan[c.id];
-        const loaderPicked = LOADERS.find((l) => plan[l]);
-        const disabled = (c.id === 'optifine' && !mc)
-          || (LOADERS.includes(c.id) && (!mc || (loaderPicked && loaderPicked !== c.id)));
-        const disabledTitle = disabled ? '请先选择 Minecraft 版本' : '';
+        const reason = compatOf(c.id);
         let action;
         if (picked) {
           action = '<span class="badge">' + esc(picked) + '</span>'
             + '<button class="tool secondary" data-cmd="pick" data-comp="' + c.id + '">更换</button>'
             + (c.id === 'minecraft' ? '' : '<button class="icon-btn" data-cmd="clear" data-comp="' + c.id + '" title="清除">✕</button>');
         } else {
-          action = '<button class="tool secondary" data-cmd="pick" data-comp="' + c.id + '"' + (disabled ? ' disabled title="' + esc(disabledTitle) + '"' : '') + '>选择版本</button>';
+          action = '<button class="tool secondary" data-cmd="pick" data-comp="' + c.id + '"' + (reason ? ' disabled title="' + esc(reason) + '"' : '') + '>选择版本</button>'
+            + (reason ? '<span class="list-meta">' + esc(reason) + '</span>' : '');
         }
         return '<div class="list-row">'
         + '<span class="list-name">' + esc(c.name) + '</span>'
         + '<span class="list-meta">' + esc(c.hint || '') + '</span>'
         + action + '</div>';
-      }).join('')
-      + (chosenLoader ? '' : '');
+      }).join('');
       const btn = $('#install-btn');
-      btn.disabled = !mc || downloading;
+      btn.disabled = !plan.minecraft || downloading;
       btn.textContent = downloading ? '安装中…' : '安装';
+      $('#custom-name').placeholder = defaultName() ? '默认：' + defaultName() + '（命名仅作用于最终实例）' : '先选择 Minecraft 版本';
     }
 
     function renderVersions(payload) {

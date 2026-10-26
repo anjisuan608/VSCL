@@ -10,6 +10,7 @@ import * as path from "path";
 import { DownloadPool, downloadFile, downloadWithFallback, httpGetJson, httpGetText } from "./downloader";
 import { mapUrl } from "./mirror";
 import { mergeVersion, readJson, DetailedVersionJson } from "../launch/versionMerge";
+import { InstallSession, InstallCancelledError } from "./installSession";
 
 /** 安装进度 */
 export interface InstallProgress {
@@ -28,6 +29,8 @@ export interface InstallOptions {
   threads: number;
   /** URL 映射 */
   source: "official" | "bmclapi";
+  /** 安装会话（逐文件进度/取消埋点；可选） */
+  tracker?: InstallSession;
 }
 
 /** 客户端 jar 下载信息（版本 JSON downloads.client） */
@@ -76,18 +79,27 @@ export async function installVersion(opts: InstallOptions): Promise<void> {
   const jarJson = readJson(gameDir, merged.jarId) as (DetailedVersionJson & { downloads?: { client?: DownloadRef } }) | undefined;
   const clientRef = jarJson?.downloads?.client;
   if (clientRef?.url) {
+    opts.tracker?.checkCancelled();
+    opts.tracker?.setPhase("安装 Minecraft 客户端", 1);
     const dest = path.join(gameDir, "versions", merged.jarId, `${merged.jarId}.jar`);
     tasks.push(
       pool
-        .run(() =>
-          downloadWithFallback(
+        .run(() => {
+          opts.tracker?.itemStart("client-jar", `client.jar (${merged.jarId})`, clientRef.size ?? 0);
+          return downloadWithFallback(
             map(clientRef.url!),
             clientRef.url!,
             dest,
-            { sha1: clientRef.sha1, onProgress: () => opts.onProgress?.({ phase: "客户端", done: 0, total: 1 }) }
-          )
-        )
-        .then(() => opts.onProgress?.({ phase: "客户端", done: 1, total: 1 }))
+            {
+              sha1: clientRef.sha1,
+              onProgress: (received, total) => opts.tracker?.itemProgress("client-jar", received, total),
+            }
+          );
+        })
+        .then(() => {
+          opts.tracker?.itemDone("client-jar");
+          opts.onProgress?.({ phase: "客户端", done: 1, total: 1 });
+        })
     );
   }
 
@@ -105,14 +117,26 @@ export async function installVersion(opts: InstallOptions): Promise<void> {
         }
         const objects = Object.values(index.objects ?? {});
         const prog = new PhaseProgress(opts.onProgress, "资源", objects.length);
+        opts.tracker?.setPhase("安装资源文件", objects.length);
         for (const obj of objects) {
           const dest = path.join(gameDir, "assets", "objects", obj.hash.slice(0, 2), obj.hash);
           const officialUrl = `https://resources.download.minecraft.net/${obj.hash.slice(0, 2)}/${obj.hash}`;
+          const key = `asset-${obj.hash}`;
           tasks.push(
             pool
-              .run(() => downloadWithFallback(map(officialUrl), officialUrl, dest, { sha1: obj.hash, retries: 2 }))
-              .then(() => prog.step())
-              .catch(() => prog.step()) // 单个资源失败不中断整体（游戏可能仍可运行）
+              .run(async () => {
+                opts.tracker?.checkCancelled();
+                opts.tracker?.itemStart(key, `assets/${obj.hash.slice(0, 2)}/${obj.hash}`, obj.size ?? 0);
+                await downloadWithFallback(map(officialUrl), officialUrl, dest, { sha1: obj.hash, retries: 2, onProgress: (r, t) => opts.tracker?.itemProgress(key, r, t) });
+              })
+              .then(() => {
+                opts.tracker?.itemDone(key);
+                prog.step();
+              })
+              .catch(() => {
+                opts.tracker?.itemDone(key); // 失败也计数（阶段进度不卡住）
+                prog.step();
+              }) // 单个资源失败不中断整体（游戏可能仍可运行）
           );
         }
       })()
@@ -139,39 +163,37 @@ export async function installVersion(opts: InstallOptions): Promise<void> {
     }
     const artifactRef = lib.downloads?.artifact;
     const rel = artifactRef?.path ?? relPathOf(lib);
-    if (rel && artifactRef?.url) {
-      // Mojang 标准格式（含 SHA-1）
+    /** 统一的库下载任务（含 tracker 埋点/取消检查） */
+    const libTask = (key: string, url: string, dest: string, sha1?: string, tolerateMissing = false) =>
       tasks.push(
         pool
-          .run(() => downloadWithFallback(map(artifactRef.url!), artifactRef.url!, path.join(gameDir, "libraries", rel), { sha1: artifactRef.sha1 }))
-          .then(() => libPhase.step())
-          .catch((e) => {
+          .run(async () => {
+            opts.tracker?.checkCancelled();
+            opts.tracker?.itemStart(key, `libraries/${rel ?? key}`, 0);
+            await downloadWithFallback(map(url), url, dest, { sha1, retries: 2, onProgress: (r, t) => opts.tracker?.itemProgress(key, r, t) });
+          })
+          .then(() => {
+            opts.tracker?.itemDone(key);
             libPhase.step();
-            throw e;
+          })
+          .catch((e) => {
+            opts.tracker?.itemDone(key);
+            libPhase.step();
+            if (!tolerateMissing) {
+              throw e;
+            } // 官方库无此文件属正常（如仅本地库），不中断
           })
       );
+    if (rel && artifactRef?.url) {
+      // Mojang 标准格式（含 SHA-1）
+      libTask(`lib-${lib.name}`, artifactRef.url!, path.join(gameDir, "libraries", rel), artifactRef.sha1);
     } else if (rel && lib.url) {
       // ModLoader profile 格式（name + maven url，无 SHA-1）
       const base = lib.url.endsWith("/") ? lib.url : `${lib.url}/`;
-      const officialUrl = `${base}${rel}`;
-      tasks.push(
-        pool
-          .run(() => downloadWithFallback(map(officialUrl), officialUrl, path.join(gameDir, "libraries", rel), { retries: 2 }))
-          .then(() => libPhase.step())
-          .catch((e) => {
-            libPhase.step();
-            throw e;
-          })
-      );
+      libTask(`lib-${lib.name}`, `${base}${rel}`, path.join(gameDir, "libraries", rel));
     } else if (rel) {
       // 无下载地址（如游戏自带/仅本地）：按 maven 布局尝试官方库地址
-      const officialUrl = `https://libraries.minecraft.net/${rel}`;
-      tasks.push(
-        pool
-          .run(() => downloadWithFallback(map(officialUrl), officialUrl, path.join(gameDir, "libraries", rel), { retries: 2 }))
-          .then(() => libPhase.step())
-          .catch(() => libPhase.step()) // 官方库无此文件属正常（如仅本地库），不中断
-      );
+      libTask(`lib-${lib.name}`, `https://libraries.minecraft.net/${rel}`, path.join(gameDir, "libraries", rel), undefined, true);
     } else {
       libPhase.total--;
       libPhase.done++;
@@ -189,14 +211,13 @@ export async function installVersion(opts: InstallOptions): Promise<void> {
       if (!wanted) {
         continue;
       }
-      tasks.push(
-        pool.run(() => downloadWithFallback(map(ref.url!), ref.url!, path.join(gameDir, "libraries", ref.path!), { sha1: ref.sha1, retries: 2 }))
-      );
+      libTask(`nat-${lib.name}-${classifier}`, ref.url!, path.join(gameDir, "libraries", ref.path!), ref.sha1);
     }
   }
 
   // log4j 配置
   if (merged.loggingFileId && merged.loggingFileUrl) {
+    opts.tracker?.setPhase("安装日志配置", 1);
     const dest = path.join(gameDir, "assets", "log_configs", merged.loggingFileId);
     tasks.push(pool.run(() => downloadWithFallback(map(merged.loggingFileUrl!), merged.loggingFileUrl!, dest, { retries: 2 })));
   }

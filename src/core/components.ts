@@ -9,30 +9,31 @@ import * as fs from "fs";
 import * as path from "path";
 import { readJson } from "./launch/versionMerge";
 
-/** 组件 id */
-export type ComponentId = "minecraft" | "fabric" | "quilt" | "legacyfabric" | "forge" | "neoforge" | "cleanroom" | "optifine";
-
 /** 组件定义 */
 export interface ComponentDef {
   id: ComponentId;
   name: string;
   /** 是否为基础版本（Minecraft 行为不同：仅切换、不可移除） */
   base?: boolean;
-  /** 说明 */
+  /** 说明（仅 Minecraft 保留） */
   hint?: string;
 }
 
 /** 安装列表（顺序对齐 HMCL 下载中心） */
 export const COMPONENTS: ComponentDef[] = [
   { id: "minecraft", name: "Minecraft", base: true, hint: "游戏本体（必选）" },
-  { id: "forge", name: "Forge", hint: "经典加载器" },
-  { id: "neoforge", name: "NeoForge", hint: "Forge 社区分支" },
-  { id: "cleanroom", name: "Cleanroom", hint: "Forge 系实验分支" },
-  { id: "fabric", name: "Fabric", hint: "轻量加载器" },
-  { id: "legacyfabric", name: "Legacy Fabric", hint: "旧版本 Fabric" },
-  { id: "quilt", name: "Quilt", hint: "Fabric 社区分支" },
-  { id: "optifine", name: "OptiFine", hint: "画质优化（可叠加于加载器之上）" },
+  { id: "forge", name: "Forge" },
+  { id: "neoforge", name: "NeoForge" },
+  { id: "cleanroom", name: "Cleanroom" },
+  { id: "fabric", name: "Fabric" },
+  { id: "legacyfabric", name: "Legacy Fabric" },
+  { id: "quilt", name: "Quilt" },
+  { id: "liteloader", name: "LiteLoader" },
+  { id: "optifine", name: "OptiFine" },
 ];
+
+/** 组件 id */
+export type ComponentId = "minecraft" | "fabric" | "quilt" | "legacyfabric" | "forge" | "neoforge" | "cleanroom" | "liteloader" | "optifine";
 
 /** store 组件名（InstanceInfo.components）→ 组件 id */
 const DETECT_TO_ID: Record<string, ComponentId> = {
@@ -43,7 +44,7 @@ const DETECT_TO_ID: Record<string, ComponentId> = {
   NeoForge: "neoforge",
   Cleanroom: "cleanroom",
   OptiFine: "optifine",
-  LiteLoader: "optifine", // 不在清单中，占位避免未识别
+  LiteLoader: "liteloader",
 };
 
 /** 由扫描组件列表推断已安装组件 id 集合（LiteLoader 等未列组件忽略） */
@@ -96,6 +97,9 @@ export function extractComponentVersions(gameDir: string, instanceId: string): P
     const parts = forgeVer.split("-");
     out.forge = parts.length > 1 ? parts.slice(1).join("-") : forgeVer;
   }
+
+  // LiteLoader
+  out.liteloader = coord("com.mumfrey:liteloader:");
 
   // OptiFine（坐标 optifine:OptiFine:<mc>_<edition>）
   const of = coord("optifine:OptiFine:");

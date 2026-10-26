@@ -7,6 +7,7 @@
  */
 import * as fs from "fs";
 import * as path from "path";
+import * as crypto from "crypto";
 import * as vscode from "vscode";
 import { Settings } from "./config/settings";
 import { ConfigStore, VsclSettings } from "./core/configStore";
@@ -28,6 +29,8 @@ import { buildLaunchCommand, ensureGameFiles } from "./core/launch/launcher";
 import { spawnGame, GameProcess } from "./core/launch/process";
 import { VersionManifestSource } from "./core/download/versionManifest";
 import { installVersion, downloadVersionChain } from "./core/download/gameInstaller";
+import { InstallSession, SessionRegistry, InstallCancelledError } from "./core/download/installSession";
+import { DownloadTaskPanel } from "./ui/downloadTaskPanel";
 import { installMrpack, readMrpackIndex } from "./core/modpack/mrpack";
 import { GameTerminal } from "./ui/gameTerminal";
 import { DownloadCenterPanel } from "./ui/downloadCenter";
@@ -41,6 +44,7 @@ import { listMods, setModEnabled, deleteMod, modsDirOf } from "./core/mod/modMan
 import { fetchLoaderVersions, installFabricLike, FabricLike, checkGameSupport } from "./core/modloader/fabricFamily";
 import { fetchForgeFamilyVersions, installForgeFamily, ForgeFamily } from "./core/modloader/forgeInstaller";
 import { fetchOptiFineVersions, installOptiFine } from "./core/modloader/optiFine";
+import { fetchLiteLoaderVersions, installLiteLoader } from "./core/modloader/liteloader";
 import { spawnSync } from "child_process";
 
 const SELECTED_INSTANCE_KEY = "vscl.selectedInstance";
@@ -426,6 +430,57 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     void vscode.window.showInformationMessage(`VSCL：「${instance.id}」校验完成，缺失的资产/依赖已补齐。`);
   }
 
+  // ── 下载与安装会话（面板 + 状态栏 + 通知跳转） ──
+
+  const sessions = new SessionRegistry();
+
+  /**
+   * 安装会话封装：打开「下载与安装」标签（多任务多标签）、状态栏常驻（可点击跳回，
+   * 意外关面板后仍可回来）、完成/失败通知（带查看按钮）。
+   */
+  async function withDownloadSession<T>(title: string, fn: (session: InstallSession) => Promise<T>): Promise<T> {
+    const session = new InstallSession(crypto.randomUUID(), title);
+    sessions.add(session);
+    DownloadTaskPanel.open(session);
+    const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 1000);
+    status.text = `$(sync~spin) ${title}`;
+    status.tooltip = "VSCL 下载任务（点击查看进度面板）";
+    status.command = { command: "vscl.openDownloadTask", title: "查看下载进度", arguments: [session.id] };
+    status.show();
+    const sub = session.onDidChange(() => {
+      if (session.completed) {
+        status.dispose();
+      } else {
+        status.text = `$(sync~spin) ${session.speedText() || "准备中…"} — ${session.title}`;
+      }
+    });
+    try {
+      const result = await fn(session);
+      session.complete();
+      const doneSel = await vscode.window.showInformationMessage(`VSCL：「${title}」下载安装完成。`, "查看");
+      if (doneSel === "查看") {
+        DownloadTaskPanel.open(session);
+      }
+      return result;
+    } catch (e) {
+      const cancelled = session.cancelled || e instanceof InstallCancelledError;
+      session.complete(cancelled ? undefined : e instanceof Error ? e.message : String(e));
+      if (!cancelled) {
+        const errSel = await vscode.window.showErrorMessage(
+          `VSCL：「${title}」失败——${e instanceof Error ? e.message : String(e)}`,
+          "查看"
+        );
+        if (errSel === "查看") {
+          DownloadTaskPanel.open(session);
+        }
+      }
+      throw cancelled ? new Error("已取消") : e;
+    } finally {
+      sub.dispose();
+      status.dispose();
+    }
+  }
+
   // ── 安装新游戏（组件列表 + 版本选择 + 编排安装） ──
 
   /** 安装计划（扩展侧单一源） */
@@ -464,6 +519,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           }
           const vs = await fetchLoaderVersions(component);
           return { component, name, items: vs.map((v) => ({ version: v.version, stable: v.stable })) };
+        }
+        case "liteloader": {
+          const mc = installNewPlan.minecraft;
+          if (!mc) {
+            return { component, name, items: [], error: "请先选择 Minecraft 版本" };
+          }
+          const entries = await fetchLiteLoaderVersions(context.asAbsolutePath(path.join("resources", "liteloader-versions.json")), mc);
+          return {
+            component,
+            name,
+            items: entries.map((e) => ({ version: e.version, stable: true, detail: e.gameVersion })),
+            error: entries.length === 0 ? `内置表未收录 Minecraft ${mc} 的 LiteLoader（已停更组件，仅支持经典版本）` : undefined,
+          };
         }
         case "forge":
         case "neoforge":
@@ -505,78 +573,104 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     InstallNewPanel.current?.refresh();
     let finalId = mc;
     try {
-      await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: "VSCL：安装新游戏", cancellable: false }, async (progress) => {
-        // 数据目录不存在时自动创建（<工作目录>/.minecraft）
-        fs.mkdirSync(gameDir, { recursive: true });
-        progress.report({ message: `Minecraft ${mc}…` });
-        const manifest = await manifestSource.fetch();
-        await downloadVersionChain(
-          gameDir,
-          mc,
-          (id) => {
-            const v = manifest.versions.find((x) => x.id === id);
-            return v ? { url: v.url, sha1: v.sha1 } : undefined;
-          },
-          source
-        );
-        await installVersion({
-          gameDir,
-          versionId: mc,
-          source,
-          threads,
-          onProgress: (p) => progress.report({ message: `${p.phase} ${p.done}/${p.total}` }),
-        });
-
-        const loader = (["fabric", "quilt", "legacyfabric", "forge", "neoforge", "cleanroom"] as const).find((l) => plan[l]);
-        const customId = plan.customName?.trim() || undefined;
-        if (loader) {
-          progress.report({ message: `${COMPONENT_NAME[loader]} ${plan[loader]}…` });
-          if (loader === "fabric" || loader === "quilt" || loader === "legacyfabric") {
-            finalId = await installFabricLike({
-              gameDir,
-              gameVersion: mc,
-              loaderVersion: plan[loader]!,
-              kind: loader,
-              threads,
-              source,
-              customId,
-            });
-          } else {
-            const javaExe = resolveJavaFor();
-            if (!javaExe) {
-              throw new Error(`安装 ${COMPONENT_NAME[loader]} 需要本机 Java，请在设置页配置。`);
-            }
-            finalId = await installForgeFamily({
-              kind: loader,
-              gameDir,
-              gameVersion: mc,
-              version: plan[loader]!,
-              javaExe,
-              threads,
-              source,
-              customId,
-              onProgress: (m) => progress.report({ message: m }),
-            });
-          }
-        }
-
-        if (plan.optifine) {
-          progress.report({ message: `OptiFine ${plan.optifine}…` });
-          const all = await fetchOptiFineVersions();
-          const of = all.find((v) => v.id === plan.optifine);
-          if (!of) {
-            throw new Error(`OptiFine 版本不存在：${plan.optifine}`);
-          }
-          finalId = await installOptiFine({
+      const loaderName = (["fabric", "quilt", "legacyfabric", "forge", "neoforge", "cleanroom"] as const).find((l) => plan[l]);
+      const displayName = `${mc}${loaderName ? ` + ${COMPONENT_NAME[loaderName]} ${plan[loaderName]}` : ""}${plan.optifine ? " + OptiFine" : ""}`;
+      await withDownloadSession(`安装 ${displayName}`, async (session) => {
+        await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `VSCL：安装 ${displayName}`, cancellable: false }, async (progress) => {
+          // 数据目录不存在时自动创建（<工作目录>/.minecraft）
+          fs.mkdirSync(gameDir, { recursive: true });
+          progress.report({ message: `Minecraft ${mc}…` });
+          const manifest = await manifestSource.fetch();
+          await downloadVersionChain(
             gameDir,
-            baseInstanceId: finalId,
-            version: of,
-            javaExe: resolveJavaFor() ?? "java",
+            mc,
+            (id) => {
+              const v = manifest.versions.find((x) => x.id === id);
+              return v ? { url: v.url, sha1: v.sha1 } : undefined;
+            },
+            source
+          );
+          await installVersion({
+            gameDir,
+            versionId: mc,
+            source,
             threads,
-            customId: loader ? undefined : plan.customName?.trim() || undefined,
-            onProgress: (m) => progress.report({ message: m }),
+            tracker: session,
+            onProgress: (p) => progress.report({ message: `${p.phase} ${p.done}/${p.total}` }),
           });
-        }
+
+          const loader = loaderName;
+          // 默认命名规则：version-主加载器（LiteLoader 优先于 Forge）；仅 OF → version-OptiFine
+          const primary = plan.liteloader ? "liteloader" : loader;
+          const autoId = primary ? `${mc}-${COMPONENT_NAME[primary]}` : plan.optifine ? `${mc}-OptiFine` : undefined;
+          const customId = plan.customName?.trim() || autoId;
+          if (plan.liteloader) {
+            progress.report({ message: `${COMPONENT_NAME.liteloader} ${plan.liteloader}…` });
+            session.setPhase(`安装 ${COMPONENT_NAME.liteloader}`);
+            const llEntries = await fetchLiteLoaderVersions(context.asAbsolutePath(path.join("resources", "liteloader-versions.json")), mc);
+            const llEntry = llEntries.find((e) => e.version === plan.liteloader);
+            if (!llEntry) {
+              throw new Error(`LiteLoader 版本不存在：${plan.liteloader}`);
+            }
+            finalId = await installLiteLoader({ gameDir, gameVersion: mc, entry: llEntry, threads, source, customId });
+          }
+          if (loader) {
+            progress.report({ message: `${COMPONENT_NAME[loader]} ${plan[loader]}…` });
+            session.setPhase(`安装 ${COMPONENT_NAME[loader]}`);
+            if (loader === "fabric" || loader === "quilt" || loader === "legacyfabric") {
+              finalId = await installFabricLike({
+                gameDir,
+                gameVersion: mc,
+                loaderVersion: plan[loader]!,
+                kind: loader,
+                threads,
+                source,
+                customId,
+              });
+            } else {
+              const javaExe = resolveJavaFor();
+              if (!javaExe) {
+                throw new Error(`安装 ${COMPONENT_NAME[loader]} 需要本机 Java，请在设置页配置。`);
+              }
+              finalId = await installForgeFamily({
+                kind: loader,
+                gameDir,
+                gameVersion: mc,
+                version: plan[loader]!,
+                javaExe,
+                threads,
+                source,
+                customId,
+                onProgress: (m) => {
+                  progress.report({ message: m });
+                  session.setPhase(m);
+                },
+              });
+            }
+          }
+
+          if (plan.optifine) {
+            progress.report({ message: `OptiFine ${plan.optifine}…` });
+            session.setPhase(`安装 OptiFine ${plan.optifine}`);
+            const all = await fetchOptiFineVersions();
+            const of = all.find((v) => v.id === plan.optifine);
+            if (!of) {
+              throw new Error(`OptiFine 版本不存在：${plan.optifine}`);
+            }
+            finalId = await installOptiFine({
+              gameDir,
+              baseInstanceId: finalId,
+              version: of,
+              javaExe: resolveJavaFor() ?? "java",
+              threads,
+              customId: loader ? undefined : plan.customName?.trim() || undefined,
+              onProgress: (m) => {
+                progress.report({ message: m });
+                session.setPhase(m);
+              },
+            });
+          }
+        });
       });
       installNewPlan = {};
       await refresh();
@@ -628,7 +722,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     try {
       let versions: { version: string; stable: boolean; of?: Parameters<typeof installOptiFine>[0]["version"] }[];
       const base = baseMinecraftVersion(gameDir, instance.id);
-      if (component === "fabric" || component === "quilt" || component === "legacyfabric") {
+      if (component === "liteloader") {
+        const entries = await fetchLiteLoaderVersions(context.asAbsolutePath(path.join("resources", "liteloader-versions.json")), base);
+        if (entries.length === 0) {
+          void vscode.window.showWarningMessage(`VSCL：内置表未收录 Minecraft ${base} 的 LiteLoader（已停更组件，仅支持经典版本）。`);
+          return;
+        }
+        versions = entries.map((e) => ({ version: e.version, stable: true }));
+      } else if (component === "fabric" || component === "quilt" || component === "legacyfabric") {
         const supported = await checkGameSupport(component, base);
         if (supported === false) {
           void vscode.window.showWarningMessage(`VSCL：Minecraft ${base} 不在 ${name} 的支持列表中。`);
@@ -657,10 +758,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (!pick) {
         return;
       }
-      const newId = await vscode.window.withProgress(
-        { location: vscode.ProgressLocation.Notification, title: `VSCL：安装 ${name} ${pick.version}`, cancellable: false },
-        async (progress) => {
-          if (component === "optifine" && pick.of) {
+      const newId = await withDownloadSession(`安装 ${name} ${pick.version}`, async (session) =>
+        vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: `VSCL：安装 ${name} ${pick.version}`, cancellable: false },
+          async (progress) => {
+            session.setPhase(`安装 ${name} ${pick.version}`);
+            if (component === "optifine" && pick.of) {
             return installOptiFine({
               gameDir,
               baseInstanceId: instance.id,
@@ -686,6 +789,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
               onProgress: (m) => progress.report({ message: m }),
             });
           }
+          if (component === "liteloader") {
+            const entries = await fetchLiteLoaderVersions(context.asAbsolutePath(path.join("resources", "liteloader-versions.json")), base);
+            const entry = entries.find((e) => e.version === pick.version);
+            if (!entry) {
+              throw new Error(`LiteLoader 版本不存在：${pick.version}`);
+            }
+            return installLiteLoader({ gameDir, gameVersion: base, entry, threads, source });
+          }
           return installFabricLike({
             gameDir,
             gameVersion: baseMinecraftVersion(gameDir, instance.id) ?? instance.id,
@@ -695,6 +806,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             source,
           });
         }
+      )
       );
       await refresh();
       store.update({ selectedInstanceId: newId });
@@ -891,31 +1003,34 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       throw new Error("未解析到游戏目录");
     }
     const source = Settings.downloadSource();
-    await vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Notification, title: `VSCL：安装 ${versionId}`, cancellable: false },
-      async (progress) => {
-        // 数据目录不存在时自动创建（<工作目录>/.minecraft）
-        fs.mkdirSync(gameDir, { recursive: true });
-        const manifest = await manifestSource.fetch();
-        progress.report({ message: "版本文件…" });
-        await downloadVersionChain(
-          gameDir,
-          versionId,
-          (id) => {
-            const v = manifest.versions.find((x) => x.id === id);
-            return v ? { url: v.url, sha1: v.sha1 } : undefined;
-          },
-          source
-        );
-        await installVersion({
-          gameDir,
-          versionId,
-          source,
-          threads: Settings.downloadThreads(),
-          onProgress: (p) => progress.report({ message: `${p.phase} ${p.done}/${p.total}` }),
-        });
-      }
-    );
+    await withDownloadSession(`安装 ${versionId}`, async (session) => {
+      await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: `VSCL：安装 ${versionId}`, cancellable: false },
+        async (progress) => {
+          // 数据目录不存在时自动创建（<工作目录>/.minecraft）
+          fs.mkdirSync(gameDir, { recursive: true });
+          const manifest = await manifestSource.fetch();
+          progress.report({ message: "版本文件…" });
+          await downloadVersionChain(
+            gameDir,
+            versionId,
+            (id) => {
+              const v = manifest.versions.find((x) => x.id === id);
+              return v ? { url: v.url, sha1: v.sha1 } : undefined;
+            },
+            source
+          );
+          await installVersion({
+            gameDir,
+            versionId,
+            source,
+            threads: Settings.downloadThreads(),
+            tracker: session,
+            onProgress: (p) => progress.report({ message: `${p.phase} ${p.done}/${p.total}` }),
+          });
+        }
+      );
+    });
     await refresh();
     void vscode.window.showInformationMessage(`VSCL：${versionId} 安装完成，可从侧栏选择启动。`);
   }
@@ -1538,6 +1653,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("vscl.openLauncherSettings", () => openLauncherSettings()),
     vscode.commands.registerCommand("vscl.openInstallNew", () => openInstallNew()),
     vscode.commands.registerCommand("vscl.openInstanceList", () => openInstanceList()),
+    vscode.commands.registerCommand("vscl.openDownloadTask", (sessionId?: string) => {
+      if (sessionId && !DownloadTaskPanel.reopen(sessionId)) {
+        // 会话面板已不存在（如窗口重载）——提示
+        void vscode.window.showInformationMessage("VSCL：该下载任务已结束。");
+      }
+    }),
     vscode.commands.registerCommand("vscl.openAccountPanel", () => openAccountPanel()),
     vscode.commands.registerCommand("vscl.openAddAccountPanel", () => openAddAccountPanel()),
     vscode.commands.registerCommand("vscl.installModpack", () => void installModpackCommand())
