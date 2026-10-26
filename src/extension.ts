@@ -194,6 +194,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         processPriority: eff.processPriority,
         environmentVariables: eff.environmentVariables,
         enableDebugLogOutput: eff.enableDebugLogOutput,
+        log4jTemplatePath: context.asAbsolutePath(path.join("resources", "log4j2-vscl.xml")),
       });
     } catch (e) {
       void vscode.window.showErrorMessage(`VSCL：构建启动命令失败——${e instanceof Error ? e.message : String(e)}`);

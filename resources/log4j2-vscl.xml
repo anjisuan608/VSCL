@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  VSCL 内置 log4j2 配置。
+  用途：版本 JSON 声明的官方 log4j 配置缺失时的兜底（如 HMCL 安装的实例
+  不落 assets/log_configs/client-*.xml），保证游戏日志以受控的格式/级别输出。
+  控制台 pattern 对齐社区常见样式：[HH:mm:ss] [线程/级别]: 消息
+-->
+<Configuration status="WARN">
+  <Appenders>
+    <Console name="Console" target="SYSTEM_OUT">
+      <PatternLayout pattern="[%d{HH:mm:ss}] [%t/%level]: %msg%n"/>
+    </Console>
+  </Appenders>
+  <Loggers>
+    <Root level="info">
+      <AppenderRef ref="Console"/>
+    </Root>
+  </Loggers>
+</Configuration>

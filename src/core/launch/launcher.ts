@@ -43,6 +43,8 @@ export interface BuildRequest {
   environmentVariables?: string;
   /** 启用 debug 日志（-Dlog4j.debug） */
   enableDebugLogOutput?: boolean;
+  /** VSCL 内置 log4j2 模板路径（官方配置缺失时的兜底，对应 HMCL 内置模板做法） */
+  log4jTemplatePath?: string;
 }
 
 /** 构建结果 */
@@ -295,13 +297,24 @@ export function buildLaunchCommand(req: BuildRequest): BuildResult {
       jvm.push(`-Xmx${Math.round(req.maxMemory)}M`);
     }
   }
-  // log4j 配置注入（配置文件位于 assets/log_configs/<id>，缺失则跳过并提示）
-  if (merged.loggingArgument && merged.loggingFileId) {
-    const log4jPath = path.join(assetsRoot, "log_configs", merged.loggingFileId);
-    if (fs.existsSync(log4jPath)) {
+  // log4j 配置注入：官方文件（版本 JSON logging.client.file）优先；
+  // 缺失时兜底使用 VSCL 内置模板（HMCL 同思路，保证日志格式/级别受控）
+  if (merged.loggingArgument) {
+    let log4jPath = merged.loggingFileId ? path.join(assetsRoot, "log_configs", merged.loggingFileId) : "";
+    if (!log4jPath || !fs.existsSync(log4jPath)) {
+      if (req.log4jTemplatePath && fs.existsSync(req.log4jTemplatePath)) {
+        const fallback = path.join(assetsRoot, "log_configs", "vscl-log4j2.xml");
+        fs.mkdirSync(path.dirname(fallback), { recursive: true });
+        if (!fs.existsSync(fallback)) {
+          fs.copyFileSync(req.log4jTemplatePath, fallback);
+        }
+        log4jPath = fallback;
+      } else {
+        warnings.push(`log4j 配置缺失：log_configs/${merged.loggingFileId ?? "?"}（下载中心完整安装后生成）`);
+      }
+    }
+    if (log4jPath && fs.existsSync(log4jPath)) {
       jvm.push(replaceVars(merged.loggingArgument, { path: log4jPath }));
-    } else {
-      warnings.push(`log4j 配置缺失（下载中心完整安装后生成）：log_configs/${merged.loggingFileId}`);
     }
   }
   if (req.enableDebugLogOutput) {
