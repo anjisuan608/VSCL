@@ -10,8 +10,8 @@ import * as path from "path";
 import { httpGetJson } from "../download/downloader";
 import { downloadVersionChain, installVersion } from "../download/gameInstaller";
 
-/** Fabric 系加载器 */
-export type FabricLike = "fabric" | "quilt";
+/** Fabric 系加载器（含 Legacy Fabric——fabric-meta 同构 fork） */
+export type FabricLike = "fabric" | "quilt" | "legacyfabric";
 
 /** meta 服务端点 */
 const META: Record<FabricLike, { versions: string; profile: (mc: string, loader: string) => string }> = {
@@ -23,6 +23,10 @@ const META: Record<FabricLike, { versions: string; profile: (mc: string, loader:
     versions: "https://meta.quiltmc.org/v2/versions/loader",
     profile: (mc, loader) => `https://meta.quiltmc.org/v2/versions/loader/${mc}/${loader}/profile/json`,
   },
+  legacyfabric: {
+    versions: "https://meta.legacyfabric.net/v2/versions/loader",
+    profile: (mc, loader) => `https://meta.legacyfabric.net/v2/versions/loader/${mc}/${loader}/profile/json`,
+  },
 };
 
 /** loader 版本列表项 */
@@ -33,7 +37,14 @@ export interface LoaderVersion {
 
 /** 获取 loader 版本列表（stable 优先） */
 export async function fetchLoaderVersions(kind: FabricLike): Promise<LoaderVersion[]> {
-  const raw = await httpGetJson<{ version: string; stable?: boolean }[]>(META[kind].versions);
+  const official = META[kind].versions;
+  // BMCLAPI 镜像优先（仅 fabric-meta 有镜像），失败/无镜像回落官方
+  let raw: { version: string; stable?: boolean }[];
+  try {
+    raw = await httpGetJson(official.replace("https://meta.fabricmc.net/", "https://bmclapi2.bangbang93.com/fabric-meta/"));
+  } catch {
+    raw = await httpGetJson(official);
+  }
   return raw
     .map((x) => ({ version: x.version, stable: !!x.stable }))
     .sort((a, b) => Number(b.stable) - Number(a.stable) || b.version.localeCompare(a.version, undefined, { numeric: true }));
@@ -49,6 +60,32 @@ interface LauncherProfile {
   libraries: { name: string; url?: string }[];
 }
 
+/** 加载器对应的 game meta 端点 */
+const GAME_META: Record<FabricLike, string> = {
+  fabric: "https://meta.fabricmc.net/v2/versions/game",
+  quilt: "https://meta.quiltmc.org/v2/versions/game",
+  legacyfabric: "https://meta.legacyfabric.net/v2/versions/game",
+};
+
+/**
+ * 校验目标 MC 版本是否在该 Fabric 系加载器的支持列表（game meta 权威数据）。
+ * @returns true=支持；false=不支持；undefined=校验请求失败（不阻断安装流程）
+ */
+export async function checkGameSupport(kind: FabricLike, mcVersion: string): Promise<boolean | undefined> {
+  try {
+    const official = GAME_META[kind];
+    let raw: { version: string }[];
+    try {
+      raw = await httpGetJson(official.replace("https://meta.fabricmc.net/", "https://bmclapi2.bangbang93.com/fabric-meta/"));
+    } catch {
+      raw = await httpGetJson(official);
+    }
+    return raw.some((v) => v.version === mcVersion);
+  } catch {
+    return undefined;
+  }
+}
+
 /** 安装选项 */
 export interface InstallLoaderOptions {
   gameDir: string;
@@ -58,6 +95,8 @@ export interface InstallLoaderOptions {
   kind: FabricLike;
   threads: number;
   source: "official" | "bmclapi";
+  /** 自定义实例/客户端名称（默认 profile 生成的 id） */
+  customId?: string;
 }
 
 /**
@@ -77,12 +116,20 @@ export async function installFabricLike(opts: InstallLoaderOptions): Promise<str
   });
 
   // ② 官方 profile
-  const profile = await httpGetJson<LauncherProfile>(META[kind].profile(gameVersion, loaderVersion));
+  const profileUrl = META[kind].profile(gameVersion, loaderVersion);
+  let profile: LauncherProfile;
+  try {
+    profile = await httpGetJson<LauncherProfile>(
+      profileUrl.replace("https://meta.fabricmc.net/", "https://bmclapi2.bangbang93.com/fabric-meta/")
+    );
+  } catch {
+    profile = await httpGetJson<LauncherProfile>(profileUrl);
+  }
   const mainClass = typeof profile.mainClass === "string" ? profile.mainClass : profile.mainClass.client;
   if (!mainClass) {
     throw new Error("profile 缺少 mainClass");
   }
-  const newId = profile.id;
+  const newId = opts.customId?.trim() || profile.id;
   const jsonPath = path.join(gameDir, "versions", newId, `${newId}.json`);
   fs.mkdirSync(path.dirname(jsonPath), { recursive: true });
   fs.writeFileSync(

@@ -8,8 +8,7 @@
   let manifest = { latest: {}, versions: [] };
   let filter = "release";
   let query = "";
-  const installing = new Set();
-  const installed = new Set();
+  let installing = new Set();
 
   const TYPE_LABEL = { release: "正式版", snapshot: "快照", old_beta: "Beta", old_alpha: "Alpha" };
 
@@ -33,7 +32,7 @@
         <span class="tag">${v.type === "snapshot" ? "最新快照" : "最新正式版"}</span>
         <div class="name">${escapeHtml(v.id)}</div>
         <button class="dc-button" data-install="${escapeHtml(v.id)}" ${installing.has(v.id) ? "disabled" : ""}>
-          ${installing.has(v.id) ? "安装中…" : installed.has(v.id) ? "重新安装" : "安装"}
+          ${installing.has(v.id) ? "打开中…" : "选择"}
         </button>
       </div>`
       )
@@ -57,10 +56,9 @@
       <div class="dc-row">
         <span class="dc-badge">${TYPE_LABEL[v.type] || v.type}</span>
         <span class="id">${escapeHtml(v.id)}</span>
-        ${installed.has(v.id) ? '<span class="dc-installed">已安装</span>' : ""}
         <span class="meta">${time}</span>
         <button class="dc-button" data-install="${escapeHtml(v.id)}" ${installing.has(v.id) ? "disabled" : ""}>
-          ${installing.has(v.id) ? "安装中…" : "安装"}
+          ${installing.has(v.id) ? "打开中…" : "选择"}
         </button>
       </div>`;
       })
@@ -76,14 +74,16 @@
     if (!msg) return;
     if (msg.type === "manifest") {
       manifest = msg.data;
-      (msg.installedIds || []).forEach((id) => installed.add(id));
+      if (msg.sources) {
+        $('#list-source').value = msg.sources.listSource || 'bmclapi';
+        $('#dl-source').value = msg.sources.downloadSource || 'bmclapi';
+      }
       render();
     } else if (msg.type === "installing") {
       installing.add(msg.id);
       render();
     } else if (msg.type === "installed") {
       installing.delete(msg.id);
-      installed.add(msg.id);
       render();
     } else if (msg.type === "install-failed") {
       installing.delete(msg.id);
@@ -103,11 +103,18 @@
       vscode.postMessage({ cmd: "refresh" });
       return;
     }
+    // 版本类型通道（顶部 chips）
     const chip = e.target.closest(".dc-chip");
     if (chip) {
       filter = chip.getAttribute("data-filter");
       document.querySelectorAll(".dc-chip").forEach((c) => c.classList.toggle("active", c === chip));
       render();
+      return;
+    }
+    // 左侧内容大类导航（当前仅「游戏」实现）
+    const nav = e.target.closest(".dc-side-item");
+    if (nav && !nav.classList.contains("disabled")) {
+      document.querySelectorAll(".dc-side-item").forEach((c) => c.classList.toggle("active", c === nav));
     }
   });
 
@@ -115,6 +122,40 @@
     query = e.target.value.trim().toLowerCase();
     render();
   });
+
+  // 双源快速切换（下载源 / 列表源）
+  $('#list-source').addEventListener('change', (e) => {
+    vscode.postMessage({ cmd: 'setSource', key: 'listSource', value: e.target.value });
+  });
+  $('#dl-source').addEventListener('change', (e) => {
+    vscode.postMessage({ cmd: 'setSource', key: 'downloadSource', value: e.target.value });
+  });
+
+  // 左右拖拽调宽（不持久化；范围 140–360px）
+  (function () {
+    const side = $('#dc-side');
+    const resizer = $('#dc-resizer');
+    let dragging = false;
+    resizer.addEventListener('mousedown', (e) => {
+      dragging = true;
+      resizer.classList.add('dragging');
+      e.preventDefault();
+    });
+    window.addEventListener("mousemove", (e) => {
+      if (!dragging) return;
+      const w = Math.min(420, Math.max(180, e.clientX));
+      side.style.width = w + "px";
+    });
+    window.addEventListener('mouseup', () => {
+      dragging = false;
+      resizer.classList.remove('dragging');
+    });
+  })();
+
+  // 注入左栏 MD3 图标（icons.js 提供）
+  if (typeof VSCL_RENDER_ICONS === "function") {
+    VSCL_RENDER_ICONS(document.body);
+  }
 
   vscode.postMessage({ cmd: "ready" });
   render();

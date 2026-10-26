@@ -160,6 +160,26 @@ function downloadStream(url: string, dest: string, sha1?: string, onProgress?: P
   });
 }
 
+/**
+ * 镜像优先、失败回落官方（BMCLAPI 部分 CDN 节点——如 mirrors.cernet.edu.cn——
+ * 间歇性 403，重试同一镜像 URL 无效，必须回落官方源）。
+ */
+export async function downloadWithFallback(
+  mappedUrl: string,
+  officialUrl: string,
+  dest: string,
+  opts: DownloadOptions = {}
+): Promise<"downloaded" | "skipped"> {
+  try {
+    return await downloadFile(mappedUrl, dest, opts);
+  } catch (mirrorError) {
+    if (mappedUrl === officialUrl) {
+      throw mirrorError;
+    }
+    return await downloadFile(officialUrl, dest, opts);
+  }
+}
+
 /** 简单并发池（信号量） */
 export class DownloadPool {
   private active = 0;

@@ -24,17 +24,42 @@ import { spawnSync } from "child_process";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { DownloadPool, downloadFile, httpGetText } from "../download/downloader";
+import { DownloadPool, downloadFile, httpGetJson, httpGetText } from "../download/downloader";
 import { mapUrl } from "../download/mirror";
 import { extractZip, readZipEntry } from "../util/minimalZip";
 
-/** Forge 系加载器 */
-export type ForgeFamily = "forge" | "neoforge";
+/** Forge 系加载器（Cleanroom 的元数据由 HMCL 社区服务维护） */
+export type ForgeFamily = "forge" | "neoforge" | "cleanroom";
 
-/** maven 根（官方源） */
-const MAVEN_ROOT: Record<ForgeFamily, string> = {
-  forge: "https://maven.minecraftforge.net",
-  neoforge: "https://maven.neoforged.net/releases",
+/** 各 loader 的端点配置 */
+const FORGE_ENDPOINTS: Record<
+  ForgeFamily,
+  {
+    root: string;
+    listUrl: string;
+    installerUrl: (version: string) => string;
+    /** 版本号是否带 MC 前缀（forge: 1.20.1-47.4.0；neoforge/cleanroom: 纯版本号） */
+    hasMcPrefix: boolean;
+  }
+> = {
+  forge: {
+    root: "https://maven.minecraftforge.net",
+    listUrl: "https://maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml",
+    installerUrl: (full) => `https://maven.minecraftforge.net/net/minecraftforge/forge/${full}/forge-${full}-installer.jar`,
+    hasMcPrefix: true,
+  },
+  neoforge: {
+    root: "https://maven.neoforged.net/releases",
+    listUrl: "https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml",
+    installerUrl: (v) => `https://maven.neoforged.net/releases/net/neoforged/neoforge/${v}/neoforge-${v}-installer.jar`,
+    hasMcPrefix: false,
+  },
+  cleanroom: {
+    root: "https://hmcl.glavo.site/metadata/cleanroom",
+    listUrl: "https://hmcl.glavo.site/metadata/cleanroom/index.json",
+    installerUrl: (v) => `https://hmcl.glavo.site/metadata/cleanroom/files/cleanroom-${v}-installer.jar`,
+    hasMcPrefix: false,
+  },
 };
 
 /** 版本列表项 */
@@ -87,25 +112,88 @@ export function mavenToPath(coord: string): string {
 /** 按坐标推断默认 maven 仓库地址 */
 function defaultMavenUrl(name: string, kind: ForgeFamily): string {
   if (name.startsWith("net.minecraftforge:")) {
-    return `${MAVEN_ROOT.forge}/`;
+    return `${FORGE_ENDPOINTS.forge.root}/`;
   }
   if (name.startsWith("net.neoforged:")) {
-    return `${MAVEN_ROOT.neoforge}/`;
+    return `${FORGE_ENDPOINTS.neoforge.root}/`;
+  }
+  if (name.startsWith("org.cleanroommc:") || name.startsWith("net.cleanroommc:")) {
+    return "https://maven.cleanroommc.com/";
   }
   return "https://libraries.minecraft.net/";
 }
 
-/** 拉取 loader 版本列表（maven-metadata.xml；BMCLAPI 镜像可用） */
-export async function fetchForgeFamilyVersions(kind: ForgeFamily, source: "official" | "bmclapi"): Promise<ForgeLoaderVersion[]> {
-  const url =
-    kind === "forge"
-      ? `${MAVEN_ROOT.forge}/net/minecraftforge/forge/maven-metadata.xml`
-      : `${MAVEN_ROOT.neoforge}/net/neoforged/neoforge/maven-metadata.xml`;
-  const xml = await httpGetText(mapUrl(url, source));
-  const versions = [...xml.matchAll(/<version>([^<]+)<\/version>/g)].map((m) => m[1]);
-  return versions
-    .reverse()
-    .map((v) => ({ version: v, stable: !/-(rc|beta|alpha|pre)/i.test(v) }));
+/**
+ * 拉取 loader 版本列表（forge/neoforge: maven-metadata.xml；cleanroom: HMCL 元数据 JSON）。
+ * @param mcVersion 目标 Minecraft 版本——提供时按版本映射过滤：
+ *   forge 按 `<mc>-` 前缀；neoforge 按版本号→MC 映射（21.x↔1.21.x、26.x↔26.x）；
+ *   cleanroom 仅支持 1.21.9+/日历版本
+ */
+export async function fetchForgeFamilyVersions(
+  kind: ForgeFamily,
+  source: "official" | "bmclapi",
+  mcVersion?: string
+): Promise<ForgeLoaderVersion[]> {
+  const ep = FORGE_ENDPOINTS[kind];
+  let versions: ForgeLoaderVersion[];
+  if (kind === "cleanroom") {
+    // HMCL 社区元数据（无镜像），数组 [{name, created_at}]
+    const raw = await httpGetJson<{ name: string; created_at?: string }[]>(ep.listUrl);
+    versions = raw.map((v: { name: string; created_at?: string }) => ({ version: v.name, stable: !/alpha|beta|rc/i.test(v.name) }));
+    if (mcVersion) {
+      // Cleanroom 为实验分支：仅 1.21.9+ 与日历版本（25+）
+      const ok = /^(2[5-9]|\d{3,})\./.test(mcVersion) || /^1\.2[1-9]\./.test(mcVersion) && compareMc(mcVersion, "1.21.9") >= 0;
+      if (!ok) {
+        return [];
+      }
+    }
+    return versions;
+  }
+  const xml = await httpGetText(mapUrl(ep.listUrl, source));
+  versions = [...xml.matchAll(/<version>([^<]+)<\/version>/g)]
+    .map((m) => ({ version: m[1], stable: !/-(rc|beta|alpha|pre)/i.test(m[1]) }))
+    .reverse();
+  if (!mcVersion) {
+    return versions;
+  }
+  if (kind === "forge") {
+    return versions.filter((v) => v.version.startsWith(`${mcVersion}-`));
+  }
+  // neoforge：版本号 → MC 映射（<100: 1.<major>.x；>=25 日历: <major>.x）
+  return versions.filter((v) => neoforgeMatchesMc(v.version, mcVersion));
+}
+
+/** neoforge 版本号与 MC 版本的映射匹配（日历时代：loader 前缀即 MC 版本，如 26.3.0.99 ↔ MC 26.3、26.1.2.124 ↔ MC 26.1.2；旧时代 21.1.209 ↔ 1.21.x） */
+function neoforgeMatchesMc(loaderVersion: string, mcVersion: string): boolean {
+  const major = Number(loaderVersion.split(".")[0]);
+  const mcParts = mcVersion.split(".");
+  const mcMajor = Number(mcParts[0]);
+  const mcMinor = Number(mcParts[1] ?? 0);
+  if (Number.isNaN(major) || Number.isNaN(mcMajor)) {
+    return false;
+  }
+  if (mcMajor >= 25) {
+    // 日历版本（26.x）：loader 前缀必须等于 MC 版本（26.3 仅匹配 26.3.x，不匹配 26.1.2.x）
+    return loaderVersion === mcVersion || loaderVersion.startsWith(`${mcVersion}.`);
+  }
+  if (mcMajor === 1) {
+    return major === mcMinor; // 1.21.x ↔ 21.x；1.20.x ↔ 20.x
+  }
+  return false;
+}
+
+/** 简版 MC 版本比较（"1.21.9" vs "1.21.8"） */
+function compareMc(a: string, b: string): number {
+  const pa = a.split(".").map(Number);
+  const pb = b.split(".").map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const va = pa[i] ?? 0;
+    const vb = pb[i] ?? 0;
+    if (va !== vb) {
+      return va - vb;
+    }
+  }
+  return 0;
 }
 
 /** 从 jar 的 MANIFEST.MF 读取 Main-Class */
@@ -126,28 +214,28 @@ export interface ForgeInstallOptions {
   javaExe: string;
   threads: number;
   source: "official" | "bmclapi";
+  /** 自定义实例/客户端名称（默认 profile 生成的 id） */
+  customId?: string;
   onProgress?: (message: string) => void;
 }
 
-/** 安装 Forge/NeoForge，返回新实例 id */
+/** 安装 Forge/NeoForge/Cleanroom，返回新实例 id */
 export async function installForgeFamily(o: ForgeInstallOptions): Promise<string> {
-  const fullVer =
-    o.kind === "forge" ? (o.version.startsWith(`${o.gameVersion}-`) ? o.version : `${o.gameVersion}-${o.version}`) : o.version;
-  const artifactPath =
-    o.kind === "forge"
-      ? `net/minecraftforge/forge/${fullVer}/forge-${fullVer}-installer.jar`
-      : `net/neoforged/neoforge/${fullVer}/neoforge-${fullVer}-installer.jar`;
+  const ep = FORGE_ENDPOINTS[o.kind];
+  const fullVer = ep.hasMcPrefix
+    ? (o.version.startsWith(`${o.gameVersion}-`) ? o.version : `${o.gameVersion}-${o.version}`)
+    : o.version;
 
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `vscl-${o.kind}-`));
   try {
-    // ① 下载 installer（镜像优先，失败回落官方源）
+    // ① 下载 installer（镜像优先，失败回落官方源；Cleanroom 仅 HMCL 元数据源）
     o.onProgress?.("下载安装器…");
     const installerJar = path.join(tmpDir, "installer.jar");
-    const installerUrl = `${MAVEN_ROOT[o.kind]}/${artifactPath}`;
+    const installerUrl = ep.installerUrl(fullVer);
     try {
       await downloadFile(mapUrl(installerUrl, o.source), installerJar, { retries: 2 });
     } catch (mirrorError) {
-      if (o.source === "bmclapi") {
+      if (o.source === "bmclapi" && mapUrl(installerUrl, o.source) !== installerUrl) {
         o.onProgress?.("镜像失败，回落官方源…");
         await downloadFile(installerUrl, installerJar, { retries: 2 });
       } else {
@@ -175,13 +263,13 @@ export async function installForgeFamily(o: ForgeInstallOptions): Promise<string
     if (profile.json) {
       const vjPath = path.join(work, profile.json);
       const versionJson = JSON.parse(fs.readFileSync(vjPath, "utf8")) as Record<string, unknown> & { id?: string };
-      versionId = versionJson.id ?? `forge-${fullVer}`;
+      versionId = o.customId?.trim() || versionJson.id || `forge-${fullVer}`;
       versionJson.id = versionId;
       const instanceDir = path.join(o.gameDir, "versions", versionId);
       fs.mkdirSync(instanceDir, { recursive: true });
       fs.writeFileSync(path.join(instanceDir, `${versionId}.json`), `${JSON.stringify(versionJson, null, 2)}\n`, "utf8");
     } else if (profile.versionInfo) {
-      versionId = profile.versionInfo.id ?? `forge-${fullVer}`;
+      versionId = o.customId?.trim() || profile.versionInfo.id || `forge-${fullVer}`;
       profile.versionInfo.id = versionId;
       const instanceDir = path.join(o.gameDir, "versions", versionId);
       fs.mkdirSync(instanceDir, { recursive: true });

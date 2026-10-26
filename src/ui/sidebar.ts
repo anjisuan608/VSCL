@@ -81,7 +81,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             break;
           case "open-page":
             if (msg.arg === "instance-settings") {
-              await vscode.commands.executeCommand("vscl.openInstanceSettings");
+              // 无实例时引导去下载中心（安装游戏）
+              if (this.store.state.instances.length === 0) {
+                await vscode.commands.executeCommand("vscl.openPage.download");
+              } else {
+                await vscode.commands.executeCommand("vscl.openInstanceSettings");
+              }
             } else if (msg.arg === "settings") {
               // 设置页 = 扩展自建「启动器设置」页
               await vscode.commands.executeCommand("vscl.openLauncherSettings");
@@ -132,15 +137,13 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   <div class="section">
     <p class="section-title">游戏</p>
     <div class="instance-card" id="instance-card" data-cmd="open-page" data-arg="instance-settings" title="打开实例设置（游戏设置 / Mod 管理）"></div>
-    <div class="nav-item" data-cmd="open-page" data-arg="instances" title="实例列表（开发中）">
+    <div class="nav-item" data-cmd="open-page" data-arg="instances" title="实例列表">
       <span class="nav-icon" data-icon="inventory"></span>
       <span class="nav-label">实例列表</span>
-      <span class="nav-hint">开发中</span>
     </div>
-    <div class="nav-item" data-cmd="open-page" data-arg="download" title="下载中心（开发中）">
+    <div class="nav-item" data-cmd="open-page" data-arg="download" title="下载中心">
       <span class="nav-icon" data-icon="download"></span>
       <span class="nav-label">下载中心</span>
-      <span class="nav-hint">开发中</span>
     </div>
   </div>
 

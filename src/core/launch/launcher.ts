@@ -284,9 +284,9 @@ export function buildLaunchCommand(req: BuildRequest): BuildResult {
   // —— JVM 段 ——
   const jvm: string[] = [];
   if (req.autoMemory) {
-    // 智能内存（HMCL autoMemory 同款）：填写值为下限，上限按系统内存计算（50%，上限 16G）
+    // 智能内存（HMCL autoMemory 同款）：填写值为下限，上限按系统内存 1/4 计算
     const totalMB = Math.floor(os.totalmem() / 1024 / 1024);
-    const smartMax = Math.max(Math.min(Math.floor(totalMB * 0.5), 16384), req.minMemory);
+    const smartMax = Math.max(Math.min(Math.floor(totalMB / 4), 16384), req.minMemory);
     if (req.minMemory > 0) {
       jvm.push(`-Xms${Math.round(req.minMemory)}M`);
     }

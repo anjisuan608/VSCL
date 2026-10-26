@@ -11,6 +11,83 @@ body {
   background-color: var(--vscode-editor-background);
 }
 
+/* ── 注册表编辑器式左右布局（左：选项卡；右：内容；中间：拖拽调宽，不持久化） ── */
+.dc-body {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.dc-side {
+  flex-shrink: 0;
+  overflow-y: auto;
+  padding: 8px 0;
+  border-right: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.25));
+  background-color: var(--vscode-sideBar-background, var(--vscode-editor-background));
+}
+
+.dc-side-title {
+  padding: 8px 18px 6px;
+  font-size: 12px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.dc-side-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 18px;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--vscode-foreground);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dc-side-icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--vscode-descriptionForeground);
+  flex-shrink: 0;
+}
+
+.dc-side-item.active .dc-side-icon {
+  color: inherit;
+}
+
+.dc-side-item:hover {
+  background-color: var(--vscode-list-hoverBackground);
+}
+
+.dc-side-item.active {
+  background-color: var(--vscode-list-activeSelectionBackground);
+  color: var(--vscode-list-activeSelectionForeground);
+}
+
+.dc-side-item.disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.dc-resizer {
+  flex-shrink: 0;
+  width: 5px;
+  cursor: col-resize;
+  background-color: transparent;
+}
+
+.dc-resizer:hover,
+.dc-resizer.dragging {
+  background-color: var(--vscode-focusBorder);
+}
+
+.dc-main {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+}
+
 .dc-header {
   position: sticky;
   top: 0;
@@ -18,6 +95,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 12px;
   padding: 8px 16px;
   background-color: var(--vscode-editor-background);

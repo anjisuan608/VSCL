@@ -44,7 +44,18 @@ export interface InstancePanelState {
     size: number;
   }[];
   resourcepacks: { name: string; size: number }[];
+  /** 光影包（shaderpacks） */
+  shaderpacks: { name: string; size: number }[];
   worlds: { name: string; size: number; mtime: number }[];
+  /** 组件状态列表（HMCL 安装列表同款：识别已装 + 版本 + 动作） */
+  componentsView: {
+    id: string;
+    name: string;
+    hint?: string;
+    base?: boolean;
+    installed: boolean;
+    version?: string;
+  }[];
 }
 
 /** 目录类型（打开目录操作） */
@@ -56,6 +67,16 @@ export interface InstancePanelCallbacks {
   deleteMod(filePath: string): Promise<void>;
   openFolder(kind: FolderKind): Promise<void>;
   installLoader(): Promise<void>;
+  /** 添加模组（jar/zip 文件选择 → 复制到 mods/） */
+  addMod(): Promise<void>;
+  /** 为指定组件选择版本并安装（未安装组件的「选择版本」入口） */
+  pickComponent(component: string): Promise<void>;
+  /** 切换组件版本（入口占位） */
+  switchComponent(component: string): Promise<void>;
+  /** 移除组件（入口占位；Minecraft 不支持移除） */
+  removeComponent(component: string): Promise<void>;
+  /** 校验并修复游戏文件（资产/库缺失补齐） */
+  verifyInstance(): Promise<void>;
   setOverride(key: string, value: unknown): Promise<void>;
   resetOverride(key: string): Promise<void>;
 }
@@ -88,7 +109,7 @@ export class InstancePanel {
     panel.onDidDispose(() => {
       InstancePanel.current = undefined;
     });
-    panel.webview.onDidReceiveMessage(async (msg: { cmd?: string; path?: string; key?: string; value?: unknown; kind?: string }) => {
+    panel.webview.onDidReceiveMessage(async (msg: { cmd?: string; path?: string; key?: string; value?: unknown; kind?: string; component?: string }) => {
       const self = InstancePanel.current;
       if (!self) {
         return;
@@ -116,6 +137,31 @@ export class InstancePanel {
           case "installLoader":
             await self.callbacks.installLoader();
             self.pushState();
+            break;
+          case "addMod":
+            await self.callbacks.addMod();
+            self.pushState();
+            break;
+          case "verifyInstance":
+            await self.callbacks.verifyInstance();
+            self.pushState();
+            break;
+          case "pickComponent":
+            if (msg.component) {
+              await self.callbacks.pickComponent(msg.component);
+              self.pushState();
+            }
+            break;
+          case "switchComponent":
+            if (msg.component) {
+              await self.callbacks.switchComponent(msg.component);
+            }
+            break;
+          case "removeComponent":
+            if (msg.component) {
+              await self.callbacks.removeComponent(msg.component);
+              self.pushState();
+            }
             break;
           case "setOverride":
             if (msg.key) {
@@ -177,6 +223,7 @@ export class InstancePanel {
     <span class="tab" data-tab="install">安装</span>
     <span class="tab" data-tab="mods">Mod 管理</span>
     <span class="tab" data-tab="resourcepacks">资源包</span>
+    <span class="tab" data-tab="shaderpacks">光影包</span>
     <span class="tab" data-tab="worlds">世界</span>
     <span class="tab placeholder" title="开发中">截图</span>
   </div>
@@ -191,41 +238,48 @@ export class InstancePanel {
 
   <div class="page" id="page-install" hidden>
     <div class="section">
-      <div class="section-title">已安装组件</div>
-      <div class="section-desc" id="install-components"></div>
+      <div class="section-title">组件</div>
+      <div class="section-desc">
+        识别当前实例已安装的组件与版本（HMCL 安装列表同款）。加载器卸载/切换在后续版本实现。
+      </div>
+      <div id="comp-list"><div class="empty">加载中…</div></div>
       <div class="row" style="grid-template-columns: 1fr;">
         <div class="row-control">
-          <button class="tool" data-cmd="installLoader">安装加载器…（Fabric / Quilt / Forge / NeoForge）</button>
+          <button class="tool secondary" data-cmd="verifyInstance">校验并修复游戏文件…</button>
         </div>
-      </div>
-      <div class="section-desc">
-        Forge / NeoForge 需要本机 Java 执行后处理（安装时自动匹配）。
-        卸载加载器与组件版本管理将在后续版本提供。
       </div>
     </div>
   </div>
 
   <div class="page" id="page-mods" hidden>
     <div class="toolbar">
-      <button class="tool" data-cmd="installLoader">安装 Fabric / Quilt</button>
-      <button class="tool secondary" data-cmd="openFolder" data-kind="mods">打开 mods 目录</button>
-      <button class="tool secondary" data-cmd="refresh">刷新</button>
+      <button class="tool" data-cmd="addMod"><span data-icon="add"></span> 添加模组</button>
+      <button class="tool secondary" data-cmd="openFolder" data-kind="mods"><span data-icon="folder"></span> 打开 mods 目录</button>
+      <button class="tool secondary" data-cmd="refresh"><span data-icon="refresh"></span> 刷新</button>
     </div>
     <div class="section"><div id="mod-list"><div class="empty">加载中…</div></div></div>
   </div>
 
   <div class="page" id="page-resourcepacks" hidden>
     <div class="toolbar">
-      <button class="tool secondary" data-cmd="openFolder" data-kind="resourcepacks">打开目录</button>
-      <button class="tool secondary" data-cmd="refresh">刷新</button>
+      <button class="tool secondary" data-cmd="openFolder" data-kind="resourcepacks"><span data-icon="folder"></span> 打开目录</button>
+      <button class="tool secondary" data-cmd="refresh"><span data-icon="refresh"></span> 刷新</button>
     </div>
     <div class="section"><div id="rp-list"><div class="empty">加载中…</div></div></div>
   </div>
 
+  <div class="page" id="page-shaderpacks" hidden>
+    <div class="toolbar">
+      <button class="tool secondary" data-cmd="openFolder" data-kind="shaderpacks"><span data-icon="folder"></span> 打开目录</button>
+      <button class="tool secondary" data-cmd="refresh"><span data-icon="refresh"></span> 刷新</button>
+    </div>
+    <div class="section"><div id="shader-list"><div class="empty">加载中…</div></div></div>
+  </div>
+
   <div class="page" id="page-worlds" hidden>
     <div class="toolbar">
-      <button class="tool secondary" data-cmd="openFolder" data-kind="saves">打开目录</button>
-      <button class="tool secondary" data-cmd="refresh">刷新</button>
+      <button class="tool secondary" data-cmd="openFolder" data-kind="saves"><span data-icon="folder"></span> 打开目录</button>
+      <button class="tool secondary" data-cmd="refresh"><span data-icon="refresh"></span> 刷新</button>
     </div>
     <div class="section"><div id="world-list"><div class="empty">加载中…</div></div></div>
   </div>
@@ -269,7 +323,7 @@ const INSTANCE_PANEL_SCRIPT = `(function () {
     t.addEventListener('click', () => {
       if (t.classList.contains('placeholder')) return;
       document.querySelectorAll('.tab[data-tab]').forEach((x) => x.classList.toggle('active', x === t));
-      ['settings', 'install', 'mods', 'resourcepacks', 'worlds'].forEach((p) => {
+      ['settings', 'install', 'mods', 'resourcepacks', 'shaderpacks', 'worlds'].forEach((p) => {
         $('#page-' + p).hidden = t.dataset.tab !== p;
       });
     })
@@ -284,7 +338,7 @@ const INSTANCE_PANEL_SCRIPT = `(function () {
     if (cmd === 'toggleMod') { vscode.postMessage({ cmd: 'toggleMod', path: el.dataset.path }); return; }
     if (cmd === 'deleteMod') { vscode.postMessage({ cmd: 'deleteMod', path: el.dataset.path }); return; }
     if (cmd === 'openFolder') { vscode.postMessage({ cmd: 'openFolder', kind: el.dataset.kind || 'mods' }); return; }
-    vscode.postMessage({ cmd });
+    vscode.postMessage({ cmd, component: el.dataset.comp });
   });
 
   // ── 游戏设置字段定义（HMCL GameSettingsPage 对齐；全部写入实例覆盖 vsclversion.json） ──
@@ -307,10 +361,12 @@ const INSTANCE_PANEL_SCRIPT = `(function () {
     },
     {
       title: '窗口',
+      desc: '预设选择会同时覆盖宽度与高度（写入实例配置）。',
       fields: [
         { key: 'windowType', label: '窗口模式', type: 'select', options: [['', '默认'], ['WINDOWED', '窗口化'], ['FULLSCREEN', '全屏'], ['MAXIMIZED', '最大化']] },
         { key: 'width', label: '窗口宽度', type: 'number' },
         { key: 'height', label: '窗口高度', type: 'number' },
+        { key: 'sizePreset', label: '尺寸预设', type: 'sizePreset' },
       ],
     },
     {
@@ -344,7 +400,17 @@ const INSTANCE_PANEL_SCRIPT = `(function () {
         const overridden = has(f.key);
         const val = overridden ? ov[f.key] : undefined;
         let control = '';
-        if (f.type === 'javaPicker') {
+        if (f.type === 'sizePreset') {
+          control = '<select data-key="' + f.key + '" ' + (overridden ? '' : 'disabled') + '>'
+            + '<option value="">选择预设…</option>'
+            + '<option value="854x480">854 × 480</option>'
+            + '<option value="1280x720">1280 × 720</option>'
+            + '<option value="1600x900">1600 × 900</option>'
+            + '<option value="1920x1080">1920 × 1080</option>'
+            + '<option value="2560x1440">2560 × 1440</option>'
+            + '<option value="3840x2160">3840 × 2160（4K）</option>'
+            + '</select>';
+        } else if (f.type === 'javaPicker') {
           const javas = (state.global && state.global.javas) || [];
           const cur = overridden ? String(val ?? '') : '';
           const isCustom = cur !== '' && !javas.some((j) => j.exePath === cur);
@@ -401,6 +467,15 @@ const INSTANCE_PANEL_SCRIPT = `(function () {
         const toggle = input.closest('.row-control').querySelector('[data-override="' + key + '"]');
         if (toggle && !toggle.checked) return;
         const field = FIELDS.find((f) => f.key === key);
+        // 尺寸预设：同时覆盖 width / height 两键
+        if (field && field.type === 'sizePreset') {
+          const [w, h] = String(input.value || '').split('x');
+          if (w && h) {
+            vscode.postMessage({ cmd: 'setOverride', key: 'width', value: Number(w) });
+            vscode.postMessage({ cmd: 'setOverride', key: 'height', value: Number(h) });
+          }
+          return;
+        }
         let value = coerce(key, input);
         if (field && field.type === 'javaPicker' && input.value === '__custom__') {
           const custom = $('#settings-form').querySelector('[data-custom="' + key + '"]');
@@ -435,7 +510,6 @@ const INSTANCE_PANEL_SCRIPT = `(function () {
     const el = $('#instance-head');
     if (!i) {
       el.innerHTML = '<div class="meta">未选择实例</div>';
-      $('#install-components').textContent = '未选择实例';
       return;
     }
     const iconHtml = i.iconUri
@@ -447,9 +521,32 @@ const INSTANCE_PANEL_SCRIPT = `(function () {
       + (i.javaMajor ? '<span class="badge">Java ' + i.javaMajor + '</span>' : '')
       + (i.running ? '<span class="badge">运行中</span>' : '')
       + '</div></div>';
-    $('#install-components').innerHTML = i.components.length
-      ? i.components.map((c) => '<span class="badge large">' + esc(c) + '</span>').join(' ')
-      : '<span class="badge large">原版（未安装加载器）</span>';
+  }
+
+  // 组件状态列表（安装 Tab）：Minecraft 仅切换入口；已装 loader 显示版本 + 切换/移除；未装提供选择版本
+  function renderComps(state) {
+    const comps = state.componentsView || [];
+    if (!state.instance) {
+      $('#comp-list').innerHTML = '<div class="empty">未选择实例</div>';
+      return;
+    }
+    $('#comp-list').innerHTML = comps.map((c) => {
+      let action;
+      if (c.base) {
+        action = '<span class="badge">' + esc(c.version || '?') + '</span>'
+          + '<button class="tool secondary" data-cmd="switchComponent" data-comp="' + c.id + '">切换版本</button>';
+      } else if (c.installed) {
+        action = '<span class="badge">' + esc(c.version || '?') + '</span>'
+          + '<button class="tool secondary" data-cmd="switchComponent" data-comp="' + c.id + '">切换版本</button>'
+          + '<button class="tool secondary" data-cmd="removeComponent" data-comp="' + c.id + '">移除</button>';
+      } else {
+        action = '<button class="tool secondary" data-cmd="pickComponent" data-comp="' + c.id + '">选择版本</button>';
+      }
+      return '<div class="list-row">'
+        + '<span class="list-name">' + esc(c.name) + '</span>'
+        + '<span class="list-meta">' + esc(c.hint || '') + '</span>'
+        + action + '</div>';
+    }).join('');
   }
 
   function renderMods(state) {
@@ -489,9 +586,15 @@ const INSTANCE_PANEL_SCRIPT = `(function () {
     if (msg && msg.type === 'state') {
       renderHead(msg.data);
       renderSettings(msg.data);
+      renderComps(msg.data);
       renderMods(msg.data);
       renderSimpleList('#rp-list', msg.data.resourcepacks, '暂无资源包', 'image');
+      renderSimpleList('#shader-list', msg.data.shaderpacks, '暂无光影包', 'image');
       renderSimpleList('#world-list', (msg.data.worlds || []).map((w) => ({ name: w.name, size: w.size })), '暂无世界', 'terrain');
+      // 静态按钮的 data-icon 占位注入（与侧栏同模式）
+      document.querySelectorAll('[data-icon]').forEach((el) => {
+        if (!el.innerHTML) el.innerHTML = VSCL_ICON(el.getAttribute('data-icon'), 15);
+      });
     }
   });
 

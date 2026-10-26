@@ -7,6 +7,7 @@
  * 变更经 EventEmitter 广播，设置页等 UI 订阅刷新。
  */
 import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
 
@@ -19,6 +20,8 @@ export interface VsclSettings {
   /** 激活的游戏目录（空 = 自动选择） */
   activeGameDirectory: string;
   downloadSource: "official" | "bmclapi";
+  /** 列表源（版本清单 / 加载器版本列表），与文件下载源独立（HMCL 同款解耦） */
+  listSource: "official" | "bmclapi";
   downloadThreads: number;
   showLogs: boolean;
   /** 智能内存：启用时 minMemory 为下限、上限按系统内存计算；禁用时 maxMemory 为固定上限 */
@@ -26,20 +29,29 @@ export interface VsclSettings {
   minMemory: number;
   maxMemory: number;
   jvmArgs: string[];
+  /** 窗口模式（""=默认 / WINDOWED / FULLSCREEN / MAXIMIZED） */
+  windowType: string;
+  /** 窗口宽高（0 = 未设置，使用游戏记忆值） */
+  width: number;
+  height: number;
 }
 
-/** 默认值 */
+/** 默认值（内存默认取设备内存的 1/4，HMCL 智能分配思路的显式默认） */
 export const SETTINGS_DEFAULTS: VsclSettings = {
   javaPath: "",
   gameDirectories: [],
   activeGameDirectory: "",
   downloadSource: "bmclapi",
+  listSource: "bmclapi",
   downloadThreads: 16,
   showLogs: true,
   autoMemory: true,
   minMemory: 512,
-  maxMemory: 4096,
+  maxMemory: Math.max(512, Math.floor(os.totalmem() / 1024 / 1024 / 4)),
   jvmArgs: [],
+  windowType: "",
+  width: 0,
+  height: 0,
 };
 
 /** 自管配置存储（globalStorage/settings.json） */

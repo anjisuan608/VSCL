@@ -86,22 +86,45 @@ export interface ResolveContext {
   activeSetting: string;
 }
 
+/** 显示/存储用路径规范化：Windows 盘符统一大写（工作区 fsPath 常给小写盘符，导致显示与状态比对不一致） */
+export function normalizePathKey(p: string): string {
+  const normalized = path.normalize(p);
+  return process.platform === "win32" ? normalized.replace(/^([a-z]):/, (m, d: string) => `${d.toUpperCase()}:`) : normalized;
+}
+
+/** 工作目录规范化：选择的是 .minecraft 时智能取其上级（对齐工作区行为） */
+export function normalizeWorkDir(p: string): string {
+  return path.basename(path.normalize(p)) === ".minecraft" ? path.dirname(path.normalize(p)) : path.normalize(p);
+}
+
+/** 工作目录 → 游戏数据目录（<工作目录>/.minecraft） */
+export function workDirToDataDir(workDir: string): string {
+  return path.join(workDir, ".minecraft");
+}
+
+/** 游戏数据目录 → 工作目录（.minecraft 的上级；非 .minecraft 路径原样返回） */
+export function displayWorkDir(dataDir: string): string {
+  return path.basename(path.normalize(dataDir)) === ".minecraft" ? path.dirname(path.normalize(dataDir)) : path.normalize(dataDir);
+}
+
 function samePath(a: string, b: string): boolean {
   const norm = (p: string) => path.normalize(p).replace(/[\\/]+$/, "").toLowerCase();
   return norm(a) === norm(b);
 }
 
 /**
- * 按优先级链解析当前游戏目录。
- * 注：工作区文件夹未命中特征检测时**不**作为游戏目录（confirmed=false 由上层决定是否询问用户）。
+ * 按优先级链解析当前游戏目录（返回**游戏数据目录** = <工作目录>/.minecraft）。
+ * 注册/显式激活的是**工作目录**（.minecraft 的上级；选中 .minecraft 时智能取上级）。
+ * 注：工作区文件夹未命中特征检测时**不**作为游戏目录。
  */
 export function resolveActiveDirectory(ctx: ResolveContext): ResolvedDirectory {
-  // ① 显式设置（存在即用，信任用户）
-  if (ctx.activeSetting.trim().length > 0 && fs.existsSync(ctx.activeSetting)) {
-    return { dir: ctx.activeSetting, source: "registered", confirmed: true };
+  // ① 显式设置的工作目录（信任用户：不存在也生效——右侧展示空列表，而非静默回落工作区）
+  if (ctx.activeSetting.trim().length > 0) {
+    const work = normalizeWorkDir(ctx.activeSetting);
+    return { dir: workDirToDataDir(work), source: "registered", confirmed: fs.existsSync(workDirToDataDir(work)) };
   }
 
-  // ② 工作区文件夹（特征检测命中：本身是游戏目录，或嵌套 .minecraft）
+  // ② 工作区文件夹（特征检测命中：本身是游戏数据目录 → 其上级即工作目录；含 .minecraft 子目录 → 直取）
   for (const root of ctx.workspaceRoots) {
     const probe = probeGameDirectory(root);
     if (probe.isGameDir) {
@@ -112,10 +135,11 @@ export function resolveActiveDirectory(ctx: ResolveContext): ResolvedDirectory {
     }
   }
 
-  // ③ 注册表中第一个存在的目录
+  // ③ 注册表工作目录（数据目录 = <工作目录>/.minecraft，任一存在即命中）
   for (const dir of ctx.registered) {
-    if (fs.existsSync(dir)) {
-      return { dir, source: "registered", confirmed: true };
+    const dataDir = workDirToDataDir(normalizeWorkDir(dir));
+    if (fs.existsSync(dataDir)) {
+      return { dir: dataDir, source: "registered", confirmed: true };
     }
   }
 

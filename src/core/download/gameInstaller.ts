@@ -7,7 +7,7 @@
  */
 import * as fs from "fs";
 import * as path from "path";
-import { DownloadPool, downloadFile, httpGetJson } from "./downloader";
+import { DownloadPool, downloadFile, downloadWithFallback, httpGetJson, httpGetText } from "./downloader";
 import { mapUrl } from "./mirror";
 import { mergeVersion, readJson, DetailedVersionJson } from "../launch/versionMerge";
 
@@ -78,12 +78,16 @@ export async function installVersion(opts: InstallOptions): Promise<void> {
   if (clientRef?.url) {
     const dest = path.join(gameDir, "versions", merged.jarId, `${merged.jarId}.jar`);
     tasks.push(
-      pool.run(() =>
-        downloadFile(map(clientRef.url!), dest, {
-          sha1: clientRef.sha1,
-          onProgress: () => opts.onProgress?.({ phase: "客户端", done: 0, total: 1 }),
-        }).then(() => opts.onProgress?.({ phase: "客户端", done: 1, total: 1 }))
-      )
+      pool
+        .run(() =>
+          downloadWithFallback(
+            map(clientRef.url!),
+            clientRef.url!,
+            dest,
+            { sha1: clientRef.sha1, onProgress: () => opts.onProgress?.({ phase: "客户端", done: 0, total: 1 }) }
+          )
+        )
+        .then(() => opts.onProgress?.({ phase: "客户端", done: 1, total: 1 }))
     );
   }
 
@@ -92,7 +96,7 @@ export async function installVersion(opts: InstallOptions): Promise<void> {
     const indexFile = path.join(gameDir, "assets", "indexes", `${merged.assetIndexId}.json`);
     tasks.push(
       (async () => {
-        await pool.run(() => downloadFile(map(merged.assetIndexUrl!), indexFile, { sha1: merged.assetIndexSha1 }));
+        await pool.run(() => downloadWithFallback(map(merged.assetIndexUrl!), merged.assetIndexUrl!, indexFile, { sha1: merged.assetIndexSha1 }));
         let index: AssetIndex;
         try {
           index = JSON.parse(fs.readFileSync(indexFile, "utf8")) as AssetIndex;
@@ -103,9 +107,10 @@ export async function installVersion(opts: InstallOptions): Promise<void> {
         const prog = new PhaseProgress(opts.onProgress, "资源", objects.length);
         for (const obj of objects) {
           const dest = path.join(gameDir, "assets", "objects", obj.hash.slice(0, 2), obj.hash);
+          const officialUrl = `https://resources.download.minecraft.net/${obj.hash.slice(0, 2)}/${obj.hash}`;
           tasks.push(
             pool
-              .run(() => downloadFile(`${map("https://resources.download.minecraft.net")}/${obj.hash.slice(0, 2)}/${obj.hash}`, dest, { sha1: obj.hash, retries: 2 }))
+              .run(() => downloadWithFallback(map(officialUrl), officialUrl, dest, { sha1: obj.hash, retries: 2 }))
               .then(() => prog.step())
               .catch(() => prog.step()) // 单个资源失败不中断整体（游戏可能仍可运行）
           );
@@ -138,7 +143,7 @@ export async function installVersion(opts: InstallOptions): Promise<void> {
       // Mojang 标准格式（含 SHA-1）
       tasks.push(
         pool
-          .run(() => downloadFile(map(artifactRef.url!), path.join(gameDir, "libraries", rel), { sha1: artifactRef.sha1 }))
+          .run(() => downloadWithFallback(map(artifactRef.url!), artifactRef.url!, path.join(gameDir, "libraries", rel), { sha1: artifactRef.sha1 }))
           .then(() => libPhase.step())
           .catch((e) => {
             libPhase.step();
@@ -148,9 +153,10 @@ export async function installVersion(opts: InstallOptions): Promise<void> {
     } else if (rel && lib.url) {
       // ModLoader profile 格式（name + maven url，无 SHA-1）
       const base = lib.url.endsWith("/") ? lib.url : `${lib.url}/`;
+      const officialUrl = `${base}${rel}`;
       tasks.push(
         pool
-          .run(() => downloadFile(map(`${base}${rel}`), path.join(gameDir, "libraries", rel), { retries: 2 }))
+          .run(() => downloadWithFallback(map(officialUrl), officialUrl, path.join(gameDir, "libraries", rel), { retries: 2 }))
           .then(() => libPhase.step())
           .catch((e) => {
             libPhase.step();
@@ -159,9 +165,10 @@ export async function installVersion(opts: InstallOptions): Promise<void> {
       );
     } else if (rel) {
       // 无下载地址（如游戏自带/仅本地）：按 maven 布局尝试官方库地址
+      const officialUrl = `https://libraries.minecraft.net/${rel}`;
       tasks.push(
         pool
-          .run(() => downloadFile(map(`https://libraries.minecraft.net/${rel}`), path.join(gameDir, "libraries", rel), { retries: 2 }))
+          .run(() => downloadWithFallback(map(officialUrl), officialUrl, path.join(gameDir, "libraries", rel), { retries: 2 }))
           .then(() => libPhase.step())
           .catch(() => libPhase.step()) // 官方库无此文件属正常（如仅本地库），不中断
       );
@@ -182,14 +189,16 @@ export async function installVersion(opts: InstallOptions): Promise<void> {
       if (!wanted) {
         continue;
       }
-      tasks.push(pool.run(() => downloadFile(map(ref.url!), path.join(gameDir, "libraries", ref.path!), { sha1: ref.sha1, retries: 2 })));
+      tasks.push(
+        pool.run(() => downloadWithFallback(map(ref.url!), ref.url!, path.join(gameDir, "libraries", ref.path!), { sha1: ref.sha1, retries: 2 }))
+      );
     }
   }
 
   // log4j 配置
   if (merged.loggingFileId && merged.loggingFileUrl) {
     const dest = path.join(gameDir, "assets", "log_configs", merged.loggingFileId);
-    tasks.push(pool.run(() => downloadFile(map(merged.loggingFileUrl!), dest, { retries: 2 })));
+    tasks.push(pool.run(() => downloadWithFallback(map(merged.loggingFileUrl!), merged.loggingFileUrl!, dest, { retries: 2 })));
   }
 
   await Promise.all(tasks);

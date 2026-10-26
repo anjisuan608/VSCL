@@ -64,6 +64,8 @@ export interface OptiFineInstallOptions {
   /** Patcher 需要 Java（仅含 optifine/Patcher.class 的新版 OF） */
   javaExe: string;
   threads: number;
+  /** 自定义实例/客户端名称（默认 `<mc>-OptiFine_<type>_<patch>`） */
+  customId?: string;
   onProgress?: (message: string) => void;
 }
 
@@ -133,7 +135,7 @@ export async function installOptiFine(o: OptiFineInstallOptions): Promise<string
     const baseJsonPath = path.join(o.gameDir, "versions", o.baseInstanceId, `${o.baseInstanceId}.json`);
     const baseJson = JSON.parse(fs.readFileSync(baseJsonPath, "utf8")) as { libraries?: { name?: string }[] };
     const onForge = (baseJson.libraries ?? []).some((l) => (l.name ?? "").startsWith("net.neoforged.fancymodloader"));
-    const newId = `${o.version.mcversion}-OptiFine_${o.version.type}_${o.version.patch}`;
+    const newId = o.customId?.trim() || `${o.version.mcversion}-OptiFine_${o.version.type}_${o.version.patch}`;
     const instanceDir = path.join(o.gameDir, "versions", newId);
     fs.mkdirSync(instanceDir, { recursive: true });
     const json = {

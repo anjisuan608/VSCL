@@ -24,10 +24,17 @@ export interface SettingsPanelState {
   /** 智能内存模型：auto=填写值为下限；manual=填写值为上限 */
   memory: { autoMemory: boolean; minMemory: number; maxMemory: number };
   jvmArgs: string[];
+  /** 窗口（""=默认；0 = 游戏记忆值） */
+  windowType: string;
+  width: number;
+  height: number;
   javaPath: string;
   downloadSource: string;
+  listSource: string;
   downloadThreads: number;
   showLogs: boolean;
+  /** 扩展缓存（globalStorage/cache） */
+  cache: { dir: string; sizeText: string };
   extensionVersion: string;
 }
 
@@ -50,6 +57,8 @@ export interface SettingsPanelCallbacks {
   openJavaDownload(kind: "java" | "bellsoft"): Promise<void>;
   /** 在 VS Code 原生设置中打开指定项 */
   openNativeSetting(query: string): Promise<void>;
+  /** 清空扩展缓存 */
+  clearCache(): Promise<void>;
 }
 
 export class SettingsPanel {
@@ -146,6 +155,10 @@ export class SettingsPanel {
           case "openNativeSetting":
             await self.callbacks.openNativeSetting(msg.query || "@ext:vscl.vscl");
             break;
+          case "clearCache":
+            await self.callbacks.clearCache();
+            self.pushState();
+            break;
           default:
             break;
         }
@@ -159,6 +172,11 @@ export class SettingsPanel {
   /** 状态变更后刷新 */
   public refresh(): void {
     this.pushState();
+  }
+
+  /** 切换设置页 Tab（如 "game"） */
+  public switchTab(tab: string): void {
+    void this.panel?.webview.postMessage({ type: "switchTab", tab });
   }
 
   private pushState(): void {
@@ -213,7 +231,7 @@ export class SettingsPanel {
       <div id="dir-list"></div>
       <div class="row" style="grid-template-columns: 1fr;">
         <div class="row-control">
-          <button class="tool" data-cmd="addDirectory">添加游戏目录…</button>
+          <span class="row-hint" style="flex: 1;">目录的添加与快速移除在「实例列表」页左侧管理</span>
           <button class="tool secondary" data-cmd="resetAutoDirectory">恢复自动选择</button>
         </div>
       </div>
@@ -253,6 +271,34 @@ export class SettingsPanel {
         <div class="row-label"><div class="row-name">启动时打开日志终端</div></div>
         <div class="row-control"><label class="override-toggle"><input type="checkbox" data-gkey="showLogs"> 启用</label></div>
       </div>
+      <div class="row">
+        <div class="row-label"><div class="row-name">窗口模式</div></div>
+        <div class="row-control">
+          <select data-gkey="windowType">
+            <option value="">默认（游戏记忆值）</option>
+            <option value="WINDOWED">窗口化</option>
+            <option value="FULLSCREEN">全屏</option>
+            <option value="MAXIMIZED">最大化</option>
+          </select>
+        </div>
+      </div>
+      <div class="row">
+        <div class="row-label"><div class="row-name">窗口尺寸</div><div class="row-hint">0 = 使用游戏记忆值</div></div>
+        <div class="row-control">
+          <input type="number" data-gkey="width" min="0" placeholder="宽" style="max-width: 110px;">
+          <span class="row-suffix">×</span>
+          <input type="number" data-gkey="height" min="0" placeholder="高" style="max-width: 110px;">
+          <select id="size-preset-global">
+            <option value="">尺寸预设…</option>
+            <option value="854x480">854 × 480</option>
+            <option value="1280x720">1280 × 720</option>
+            <option value="1600x900">1600 × 900</option>
+            <option value="1920x1080">1920 × 1080</option>
+            <option value="2560x1440">2560 × 1440</option>
+            <option value="3840x2160">3840 × 2160（4K）</option>
+          </select>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -261,7 +307,16 @@ export class SettingsPanel {
     <div class="section">
       <div class="section-title">下载</div>
       <div class="row">
-        <div class="row-label"><div class="row-name">下载源</div></div>
+        <div class="row-label"><div class="row-name">列表源</div><div class="row-hint">版本清单 / 加载器版本列表</div></div>
+        <div class="row-control">
+          <select data-gkey="listSource">
+            <option value="bmclapi">BMCLAPI 镜像</option>
+            <option value="official">官方源</option>
+          </select>
+        </div>
+      </div>
+      <div class="row">
+        <div class="row-label"><div class="row-name">下载源</div><div class="row-hint">游戏文件（jar / 资源 / 依赖库）</div></div>
         <div class="row-control">
           <select data-gkey="downloadSource">
             <option value="bmclapi">BMCLAPI 镜像（国内加速）</option>
@@ -278,6 +333,19 @@ export class SettingsPanel {
 
   <!-- 关于 -->
   <div class="page" id="page-about" hidden>
+    <div class="section">
+      <div class="section-title">缓存</div>
+      <div class="section-desc">
+        版本清单等可再生数据缓存于扩展 globalStorage（VS Code 扩展规范：缓存不写用户工作区）。
+        清理后重新进入下载中心会自动重新拉取；游戏文件本体不受影响。
+      </div>
+      <div class="row" style="grid-template-columns: 1fr;">
+        <div class="row-control">
+          <span class="list-meta" id="cache-info" style="flex: 1;">—</span>
+          <button class="tool secondary" data-cmd="clearCache">清理缓存</button>
+        </div>
+      </div>
+    </div>
     <div class="section">
       <div class="section-title">关于</div>
       <div class="section-desc">
@@ -335,8 +403,26 @@ export class SettingsPanel {
     $('[data-gkey="downloadSource"]').addEventListener('change', (e) => {
       vscode.postMessage({ cmd: 'setGlobal', key: 'downloadSource', value: e.target.value });
     });
+    $('[data-gkey="listSource"]').addEventListener('change', (e) => {
+      vscode.postMessage({ cmd: 'setGlobal', key: 'listSource', value: e.target.value });
+    });
     $('[data-gkey="downloadThreads"]').addEventListener('change', (e) => {
       vscode.postMessage({ cmd: 'setGlobal', key: 'downloadThreads', value: Number(e.target.value || 16) });
+    });
+    // 窗口尺寸
+    ['width', 'height'].forEach((k) => {
+      $('[data-gkey="' + k + '"]').addEventListener('change', (e) => {
+        vscode.postMessage({ cmd: 'setGlobal', key: k, value: Number(e.target.value || 0) });
+      });
+    });
+    // 尺寸预设 → 填充宽高（HMCL 同款联动）
+    $('#size-preset-global').addEventListener('change', (e) => {
+      const [w, h] = String(e.target.value || '').split('x');
+      if (!w) return;
+      $('[data-gkey="width"]').value = w;
+      $('[data-gkey="height"]').value = h;
+      vscode.postMessage({ cmd: 'setGlobal', key: 'width', value: Number(w) });
+      vscode.postMessage({ cmd: 'setGlobal', key: 'height', value: Number(h) });
     });
 
     // Java 列表（只读展示；选择在「游戏」Tab）
@@ -403,7 +489,13 @@ export class SettingsPanel {
 
     window.addEventListener('message', (e) => {
       const msg = e.data;
-      if (!msg || msg.type !== 'state') return;
+      if (!msg) return;
+      if (msg.type === 'switchTab') {
+        const t = document.querySelector('.tab[data-stab="' + msg.tab + '"]');
+        if (t) t.click();
+        return;
+      }
+      if (msg.type !== 'state') return;
       renderMemory(msg.data);
       renderJavas(msg.data);
       renderJavaPicker(msg.data);
@@ -411,7 +503,14 @@ export class SettingsPanel {
       $('[data-gkey="jvmArgs"]').value = (msg.data.jvmArgs || []).join('\\n');
       $('[data-gkey="showLogs"]').checked = !!msg.data.showLogs;
       $('[data-gkey="downloadSource"]').value = msg.data.downloadSource || 'bmclapi';
+      $('[data-gkey="listSource"]').value = msg.data.listSource || 'bmclapi';
       $('[data-gkey="downloadThreads"]').value = msg.data.downloadThreads || 16;
+      $('[data-gkey="width"]').value = msg.data.width || '';
+      $('[data-gkey="height"]').value = msg.data.height || '';
+      $('[data-gkey="windowType"]').value = msg.data.windowType || '';
+      if (msg.data.cache) {
+        $('#cache-info').textContent = msg.data.cache.sizeText + ' · ' + msg.data.cache.dir;
+      }
       $('#ext-version').textContent = msg.data.extensionVersion || '';
     });
 

@@ -52,7 +52,16 @@ export class VersionManifestSource {
       }
     }
     const url = mapUrl(VERSION_MANIFEST_URL, this.source());
-    const manifest = await httpGetJson<VersionManifest>(url);
+    let manifest: VersionManifest;
+    try {
+      manifest = await httpGetJson<VersionManifest>(url);
+    } catch (mirrorError) {
+      // BMCLAPI 部分 CDN 节点 403 → 回落官方
+      if (url === VERSION_MANIFEST_URL) {
+        throw mirrorError;
+      }
+      manifest = await httpGetJson<VersionManifest>(VERSION_MANIFEST_URL);
+    }
     try {
       fs.mkdirSync(this.cacheDir, { recursive: true });
       fs.writeFileSync(cacheFile, JSON.stringify(manifest), "utf8");

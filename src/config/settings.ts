@@ -9,12 +9,17 @@
 import * as vscode from "vscode";
 import type { ConfigStore, VsclSettings } from "../core/configStore";
 
-/** 全局游戏设置（智能内存模型） */
+/** 全局游戏设置（智能内存模型 + 窗口尺寸） */
 export interface GlobalGameSettings {
   autoMemory: boolean;
   minMemory: number;
   maxMemory: number;
   jvmArgs: string[];
+  /** 窗口模式（""=默认） */
+  windowType: string;
+  /** 窗口宽高（0 = 未设置） */
+  width: number;
+  height: number;
 }
 
 let store: ConfigStore | undefined;
@@ -64,9 +69,14 @@ export namespace Settings {
     return cfg().get().activeGameDirectory;
   }
 
-  /** 下载源 */
+  /** 文件下载源 */
   export function downloadSource(): "official" | "bmclapi" {
     return cfg().get().downloadSource;
+  }
+
+  /** 列表源（版本清单/加载器列表） */
+  export function listSource(): "official" | "bmclapi" {
+    return cfg().get().listSource;
   }
 
   /** 下载并发数 */
@@ -82,7 +92,15 @@ export namespace Settings {
   /** 全局游戏设置 */
   export function globalGameSettings(): GlobalGameSettings {
     const s = cfg().get();
-    return { autoMemory: s.autoMemory, minMemory: s.minMemory, maxMemory: s.maxMemory, jvmArgs: s.jvmArgs };
+    return {
+      autoMemory: s.autoMemory,
+      minMemory: s.minMemory,
+      maxMemory: s.maxMemory,
+      jvmArgs: s.jvmArgs,
+      windowType: s.windowType,
+      width: s.width,
+      height: s.height,
+    };
   }
 
   /** 添加游戏目录（去重） */

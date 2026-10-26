@@ -10,8 +10,10 @@ import * as path from "path";
 import * as vscode from "vscode";
 import { Settings } from "./config/settings";
 import { ConfigStore, VsclSettings } from "./core/configStore";
+import { cacheRoot, cacheStats, clearCache, formatBytes } from "./core/cacheManager";
+import { COMPONENTS, installedComponentIds, extractComponentVersions, baseMinecraftVersion } from "./core/components";
 import { Store } from "./core/state/store";
-import { resolveActiveDirectory, officialGameDirectory, isSameDirectory } from "./core/game/gameDirectory";
+import { resolveActiveDirectory, officialGameDirectory, isSameDirectory, probeGameDirectory, normalizePathKey, normalizeWorkDir, workDirToDataDir, displayWorkDir } from "./core/game/gameDirectory";
 import { scanInstances } from "./core/game/instance";
 import { effectiveSettings, loadOverrides, setOverride, resetOverride, OverrideKey } from "./core/game/instanceConfig";
 import { probeInstanceIcon, readIconDataUri } from "./core/game/instanceIcon";
@@ -31,9 +33,11 @@ import { DownloadCenterPanel } from "./ui/downloadCenter";
 import { InstancePanel, InstancePanelState, FolderKind } from "./ui/instancePanel";
 import { SettingsPanel, SettingsPanelState } from "./ui/settingsPanel";
 import { AccountPanel, AccountPanelState, AddAccountPanel } from "./ui/accountPanel";
+import { InstallNewPanel, InstallPlan, ComponentVersionsPayload } from "./ui/installNew";
+import { InstanceListPanel, InstanceListState, InstanceListDirectory } from "./ui/instanceList";
 import { SidebarProvider } from "./ui/sidebar";
 import { listMods, setModEnabled, deleteMod, modsDirOf } from "./core/mod/modManager";
-import { fetchLoaderVersions, installFabricLike, FabricLike } from "./core/modloader/fabricFamily";
+import { fetchLoaderVersions, installFabricLike, FabricLike, checkGameSupport } from "./core/modloader/fabricFamily";
 import { fetchForgeFamilyVersions, installForgeFamily, ForgeFamily } from "./core/modloader/forgeInstaller";
 import { fetchOptiFineVersions, installOptiFine } from "./core/modloader/optiFine";
 import { spawnSync } from "child_process";
@@ -61,6 +65,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // 自管配置存储（globalStorage/settings.json；原生设置仅保留 useIntegratedBrowser / microsoftClientId）
   const configStore = new ConfigStore(path.join(context.globalStorageUri.fsPath, "settings.json"));
   Settings.bind(configStore);
+
+  // 官方启动器目录：初始化时扫描，不存在直接创建（HMCL 便携用户的兜底目录）
+  try {
+    const officialDir = officialGameDirectory();
+    if (!fs.existsSync(officialDir)) {
+      fs.mkdirSync(officialDir, { recursive: true });
+    }
+  } catch {
+    /* 无权限时忽略（实例列表仍会列出该项） */
+  }
 
   const store = new Store();
   let latestJava: JavaInstall | undefined;
@@ -253,6 +267,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       InstancePanel.current?.refresh();
       InstancePanel.current?.updateTitle(s.selectedInstanceId);
       SettingsPanel.current?.refresh();
+      InstanceListPanel.current?.refresh();
     })
   );
 
@@ -353,6 +368,392 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       return offlineIdentity(entry.username);
     }
     return offlineIdentity(DEFAULT_USERNAME); // 无账户：Dev
+  }
+
+  /** 校验并修复选中实例的游戏文件（资产/库按 SHA-1 幂等补齐——修复语言文件等资产缺失） */
+  async function verifySelectedInstance(): Promise<void> {
+    const instance = store.selectedInstance;
+    const gameDir = store.state.activeDirectory;
+    if (!instance || !gameDir) {
+      void vscode.window.showWarningMessage("VSCL：未选择实例或未解析到游戏目录。");
+      return;
+    }
+    await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: `VSCL：校验 ${instance.id}`, cancellable: false },
+      async (progress) => {
+        await installVersion({
+          gameDir,
+          versionId: instance.id,
+          source: Settings.downloadSource(),
+          threads: Settings.downloadThreads(),
+          onProgress: (p) => progress.report({ message: `${p.phase} ${p.done}/${p.total}` }),
+        });
+      }
+    );
+    void vscode.window.showInformationMessage(`VSCL：「${instance.id}」校验完成，缺失的资产/依赖已补齐。`);
+  }
+
+  // ── 安装新游戏（组件列表 + 版本选择 + 编排安装） ──
+
+  /** 安装计划（扩展侧单一源） */
+  let installNewPlan: InstallPlan = {};
+  let installNewDownloading = false;
+
+  const COMPONENT_NAME: Record<string, string> = Object.fromEntries(COMPONENTS.map((c) => [c.id, c.name]));
+
+  /** 按组件拉取版本列表（列表源；MC/OF 按依赖过滤） */
+  async function fetchComponentVersions(component: string): Promise<ComponentVersionsPayload> {
+    const name = COMPONENT_NAME[component] ?? component;
+    const list = Settings.listSource();
+    try {
+      switch (component) {
+        case "minecraft": {
+          const m = await manifestSource.fetch();
+          return {
+            component,
+            name,
+            items: m.versions.map((v) => ({
+              version: v.id,
+              stable: v.type === "release",
+              detail: (v.releaseTime ?? "").slice(0, 10),
+            })),
+          };
+        }
+        case "fabric":
+        case "quilt":
+        case "legacyfabric": {
+          const mc = installNewPlan.minecraft;
+          if (mc) {
+            const supported = await checkGameSupport(component, mc);
+            if (supported === false) {
+              return { component, name, items: [], error: `Minecraft ${mc} 不在 ${name} 的支持列表中（官方 game meta）` };
+            }
+          }
+          const vs = await fetchLoaderVersions(component);
+          return { component, name, items: vs.map((v) => ({ version: v.version, stable: v.stable })) };
+        }
+        case "forge":
+        case "neoforge":
+        case "cleanroom": {
+          const mc = installNewPlan.minecraft;
+          const vs = await fetchForgeFamilyVersions(component, list, mc);
+          if (vs.length === 0 && mc) {
+            return { component, name, items: [], error: `${name} 未提供 Minecraft ${mc} 对应的版本` };
+          }
+          return { component, name, items: vs.map((v) => ({ version: v.version, stable: v.stable })) };
+        }
+        case "optifine": {
+          const all = await fetchOptiFineVersions();
+          const mc = installNewPlan.minecraft;
+          const filtered = mc ? all.filter((v) => v.mcversion === mc) : all;
+          return { component, name, items: filtered.map((v) => ({ version: v.id, stable: true, detail: v.mcversion })) };
+        }
+        default:
+          throw new Error(`未知组件：${component}`);
+      }
+    } catch (e) {
+      return { component, name, items: [], error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
+  /** 编排安装：Minecraft → 加载器（至多一个）→ OptiFine（可叠加） */
+  async function installFromPlan(plan: InstallPlan): Promise<void> {
+    const mc = plan.minecraft;
+    if (!mc) {
+      throw new Error("请先选择 Minecraft 版本");
+    }
+    const gameDir = store.state.activeDirectory;
+    if (!gameDir) {
+      throw new Error("未解析到游戏目录");
+    }
+    const source = Settings.downloadSource();
+    const threads = Settings.downloadThreads();
+    installNewDownloading = true;
+    InstallNewPanel.current?.refresh();
+    let finalId = mc;
+    try {
+      await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: "VSCL：安装新游戏", cancellable: false }, async (progress) => {
+        // 数据目录不存在时自动创建（<工作目录>/.minecraft）
+        fs.mkdirSync(gameDir, { recursive: true });
+        progress.report({ message: `Minecraft ${mc}…` });
+        const manifest = await manifestSource.fetch();
+        await downloadVersionChain(
+          gameDir,
+          mc,
+          (id) => {
+            const v = manifest.versions.find((x) => x.id === id);
+            return v ? { url: v.url, sha1: v.sha1 } : undefined;
+          },
+          source
+        );
+        await installVersion({
+          gameDir,
+          versionId: mc,
+          source,
+          threads,
+          onProgress: (p) => progress.report({ message: `${p.phase} ${p.done}/${p.total}` }),
+        });
+
+        const loader = (["fabric", "quilt", "legacyfabric", "forge", "neoforge", "cleanroom"] as const).find((l) => plan[l]);
+        const customId = plan.customName?.trim() || undefined;
+        if (loader) {
+          progress.report({ message: `${COMPONENT_NAME[loader]} ${plan[loader]}…` });
+          if (loader === "fabric" || loader === "quilt" || loader === "legacyfabric") {
+            finalId = await installFabricLike({
+              gameDir,
+              gameVersion: mc,
+              loaderVersion: plan[loader]!,
+              kind: loader,
+              threads,
+              source,
+              customId,
+            });
+          } else {
+            const javaExe = resolveJavaFor();
+            if (!javaExe) {
+              throw new Error(`安装 ${COMPONENT_NAME[loader]} 需要本机 Java，请在设置页配置。`);
+            }
+            finalId = await installForgeFamily({
+              kind: loader,
+              gameDir,
+              gameVersion: mc,
+              version: plan[loader]!,
+              javaExe,
+              threads,
+              source,
+              customId,
+              onProgress: (m) => progress.report({ message: m }),
+            });
+          }
+        }
+
+        if (plan.optifine) {
+          progress.report({ message: `OptiFine ${plan.optifine}…` });
+          const all = await fetchOptiFineVersions();
+          const of = all.find((v) => v.id === plan.optifine);
+          if (!of) {
+            throw new Error(`OptiFine 版本不存在：${plan.optifine}`);
+          }
+          finalId = await installOptiFine({
+            gameDir,
+            baseInstanceId: finalId,
+            version: of,
+            javaExe: resolveJavaFor() ?? "java",
+            threads,
+            customId: loader ? undefined : plan.customName?.trim() || undefined,
+            onProgress: (m) => progress.report({ message: m }),
+          });
+        }
+      });
+      installNewPlan = {};
+      await refresh();
+      store.update({ selectedInstanceId: finalId });
+      void vscode.window.showInformationMessage(`VSCL：「${finalId}」安装完成，已选中可直接启动。`);
+    } finally {
+      installNewDownloading = false;
+      InstallNewPanel.current?.refresh();
+    }
+  }
+
+  /** 打开「安装新游戏」面板（prefillMc：从下载中心带入的 MC 版本） */
+  function openInstallNew(prefillMc?: string): void {
+    if (prefillMc) {
+      installNewPlan = { ...installNewPlan, minecraft: prefillMc };
+    }
+    InstallNewPanel.createOrShow(context, {
+      getPlan: () => installNewPlan,
+      setPlan: (component, version) => {
+        installNewPlan = { ...installNewPlan, [component]: version };
+      },
+      clearPlan: (component) => {
+        if (component) {
+          const { [component]: _, ...rest } = installNewPlan;
+          installNewPlan = rest;
+        } else {
+          installNewPlan = {};
+        }
+      },
+      isDownloading: () => installNewDownloading,
+      fetchVersions: (c) => fetchComponentVersions(c),
+      install: (plan) => installFromPlan(plan),
+    });
+  }
+
+  /** 实例设置「选择版本」：按组件 QuickPick 版本并安装（复用既有安装器） */
+  async function pickComponentForInstance(component: string): Promise<void> {
+    const instance = store.selectedInstance;
+    const gameDir = store.state.activeDirectory;
+    if (!instance || !gameDir) {
+      void vscode.window.showWarningMessage("VSCL：未选择实例或未解析到游戏目录。");
+      return;
+    }
+    const name = COMPONENT_NAME[component] ?? component;
+    const list = Settings.listSource();
+    const source = Settings.downloadSource();
+    const threads = Settings.downloadThreads();
+    try {
+      let versions: { version: string; stable: boolean; of?: Parameters<typeof installOptiFine>[0]["version"] }[];
+      const base = baseMinecraftVersion(gameDir, instance.id);
+      if (component === "fabric" || component === "quilt" || component === "legacyfabric") {
+        const supported = await checkGameSupport(component, base);
+        if (supported === false) {
+          void vscode.window.showWarningMessage(`VSCL：Minecraft ${base} 不在 ${name} 的支持列表中。`);
+          return;
+        }
+        versions = (await fetchLoaderVersions(component)).map((v) => ({ version: v.version, stable: v.stable }));
+      } else if (component === "forge" || component === "neoforge" || component === "cleanroom") {
+        const all = await fetchForgeFamilyVersions(component, list, base);
+        versions = all.map((v) => ({ version: v.version, stable: v.stable }));
+        if (versions.length === 0) {
+          void vscode.window.showWarningMessage(`VSCL：${name} 未提供 Minecraft ${base} 对应的版本。`);
+          return;
+        }
+      } else if (component === "optifine") {
+        const base = baseMinecraftVersion(gameDir, instance.id);
+        const all = await fetchOptiFineVersions();
+        versions = all.filter((v) => v.mcversion === base).map((v) => ({ version: v.id, stable: true, of: v }));
+      } else {
+        void vscode.window.showWarningMessage(`VSCL：组件「${name}」暂不支持在线安装。`);
+        return;
+      }
+      const pick = await vscode.window.showQuickPick(
+        versions.map((v) => ({ label: v.version, description: v.stable ? "稳定版" : "开发版", version: v.version, of: v.of })),
+        { placeHolder: `选择 ${name} 版本`, matchOnDescription: true }
+      );
+      if (!pick) {
+        return;
+      }
+      const newId = await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: `VSCL：安装 ${name} ${pick.version}`, cancellable: false },
+        async (progress) => {
+          if (component === "optifine" && pick.of) {
+            return installOptiFine({
+              gameDir,
+              baseInstanceId: instance.id,
+              version: pick.of,
+              javaExe: resolveJavaFor() ?? "java",
+              threads,
+              onProgress: (m) => progress.report({ message: m }),
+            });
+          }
+          if (component === "forge" || component === "neoforge" || component === "cleanroom") {
+            const javaExe = resolveJavaFor();
+            if (!javaExe) {
+              throw new Error(`安装 ${name} 需要本机 Java，请在设置页配置。`);
+            }
+            return installForgeFamily({
+              kind: component,
+              gameDir,
+              gameVersion: baseMinecraftVersion(gameDir, instance.id) ?? instance.id,
+              version: pick.version,
+              javaExe,
+              threads,
+              source,
+              onProgress: (m) => progress.report({ message: m }),
+            });
+          }
+          return installFabricLike({
+            gameDir,
+            gameVersion: baseMinecraftVersion(gameDir, instance.id) ?? instance.id,
+            loaderVersion: pick.version,
+            kind: component as "fabric" | "quilt" | "legacyfabric",
+            threads,
+            source,
+          });
+        }
+      );
+      await refresh();
+      store.update({ selectedInstanceId: newId });
+      void vscode.window.showInformationMessage(`VSCL：已安装 ${newId}。`);
+    } catch (e) {
+      void vscode.window.showErrorMessage(`VSCL：安装失败——${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  /** 实例列表面板状态（目录=工作目录即 .minecraft 上级；小字=数据目录 <工作目录>/.minecraft） */
+  function instanceListState(): InstanceListState {
+    const norm = (p: string) => path.normalize(p).toLowerCase();
+    const activeWorkDir = displayWorkDir(store.state.activeDirectory ?? "");
+    const seen = new Set<string>();
+    const directories: InstanceListDirectory[] = [];
+    const push = (workDirRaw: string, kind: "workspace" | "registered" | "official") => {
+      const work = normalizeWorkDir(normalizePathKey(workDirRaw));
+      if (!seen.has(norm(work))) {
+        seen.add(norm(work));
+        directories.push({
+          path: work,
+          name: path.basename(work) || work,
+          displayPath: normalizePathKey(workDirToDataDir(work)),
+          kind,
+          active: norm(work) === norm(activeWorkDir),
+        });
+      }
+    };
+    // 工作区（特征命中的文件夹：本身是数据目录 → 其上级；含 .minecraft → 该文件夹）
+    for (const root of (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath)) {
+      const probe = probeGameDirectory(root);
+      if (probe.isGameDir) {
+        push(displayWorkDir(root), "workspace");
+      } else if (probe.nestedMinecraft) {
+        push(root, "workspace");
+      }
+    }
+    // 注册目录（存储即工作目录）
+    for (const dir of Settings.gameDirectories()) {
+      push(dir, "registered");
+    }
+    // 官方目录（.minecraft 的上级为工作目录；始终列出兜底）
+    push(displayWorkDir(officialGameDirectory()), "official");
+    return {
+      directories,
+      activeDir: normalizePathKey(store.state.activeDirectory ?? ""),
+      instances: store.state.instances.map((i) => ({
+        id: i.id,
+        components: i.components,
+        javaMajor: i.javaMajor,
+        icon: i.icon,
+        running: store.state.runningInstanceIds.includes(i.id),
+      })),
+      selectedId: store.state.selectedInstanceId,
+    };
+  }
+
+  /** 打开实例列表页 */
+  function openInstanceList(): void {
+    InstanceListPanel.createOrShow(context, {
+      getState: instanceListState,
+      activateDirectory: async (p) => {
+        Settings.setActiveGameDirectory(p);
+        await refresh();
+      },
+      removeDirectory: async (p) => {
+        Settings.removeGameDirectory(p);
+        // 注意：activeDirectory 是数据目录（<工作目录>/.minecraft），需转换后与工作目录比较
+        const activeWork = displayWorkDir(store.state.activeDirectory ?? "");
+        if (store.state.activeDirectory && isSameDirectory(activeWork, normalizeWorkDir(p))) {
+          Settings.setActiveGameDirectory("");
+        }
+        await refresh();
+      },
+      addDirectory: () => addDirectoryDialog(),
+      resetAutoDirectory: async () => {
+        Settings.setActiveGameDirectory("");
+        await refresh();
+      },
+      launchInstance: async (id) => {
+        store.update({ selectedInstanceId: id });
+        await vscode.commands.executeCommand("vscl.launch");
+      },
+      selectInstance: (id) => {
+        store.update({ selectedInstanceId: id });
+      },
+      openInstanceSettings: async (id) => {
+        store.update({ selectedInstanceId: id });
+        openInstanceSettings();
+      },
+      openGlobalGameSettings: () => openLauncherSettings("game"),
+      refresh: () => void refresh(),
+    });
   }
 
   /** 打开「添加账户」标签 */
@@ -459,6 +860,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await vscode.window.withProgress(
       { location: vscode.ProgressLocation.Notification, title: `VSCL：安装 ${versionId}`, cancellable: false },
       async (progress) => {
+        // 数据目录不存在时自动创建（<工作目录>/.minecraft）
+        fs.mkdirSync(gameDir, { recursive: true });
         const manifest = await manifestSource.fetch();
         progress.report({ message: "版本文件…" });
         await downloadVersionChain(
@@ -483,10 +886,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     void vscode.window.showInformationMessage(`VSCL：${versionId} 安装完成，可从侧栏选择启动。`);
   }
 
-  /** 版本清单数据源（globalStorage 缓存 + 内存 TTL） */
+  /** 版本清单数据源（globalStorage/cache + 内存 TTL；清单属"列表"走 listSource） */
   const manifestSource = new VersionManifestSource(
-    context.globalStorageUri.fsPath,
-    () => Settings.downloadSource()
+    path.join(context.globalStorageUri.fsPath, "cache"),
+    () => Settings.listSource()
   );
 
   // 主侧栏
@@ -508,9 +911,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
   }
 
-  /** 实例设置面板状态快照（游戏设置 + Mod / 资源包 / 世界列表） */
+  /** 实例设置面板状态快照（游戏设置 + Mod / 资源包 / 世界 / 组件列表） */
   function instancePanelState(): InstancePanelState {
     const instance = store.selectedInstance;
+    const gameDir = store.state.activeDirectory ?? "";
     const global = Settings.globalGameSettings();
     const overrides = instance ? (loadOverrides(instance.dir) as Record<string, unknown>) : {};
     let iconUri: string | undefined;
@@ -561,7 +965,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       overrides,
       mods,
       resourcepacks: instance ? listDirEntries(path.join(instance.dir, "resourcepacks")) : [],
+      shaderpacks: instance ? listDirEntries(path.join(instance.dir, "shaderpacks")) : [],
       worlds: instance ? listDirEntries(path.join(instance.dir, "saves")) : [],
+      componentsView: instance
+        ? (() => {
+            const installed = new Set(installedComponentIds(instance.components));
+            const versions = extractComponentVersions(gameDir, instance.id);
+            const baseVersion = baseMinecraftVersion(gameDir, instance.id);
+            return COMPONENTS.map((c) => ({
+              id: c.id,
+              name: c.name,
+              hint: c.hint,
+              base: c.base,
+              installed: c.base ? true : installed.has(c.id),
+              version: c.base ? baseVersion : versions[c.id],
+            }));
+          })()
+        : [],
     };
   }
 
@@ -603,6 +1023,46 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         }
       },
       installLoader: () => installModLoader(),
+      addMod: async () => {
+        const instance = store.selectedInstance;
+        if (!instance) {
+          return;
+        }
+        const uris = await vscode.window.showOpenDialog({
+          canSelectMany: true,
+          filters: { "Minecraft Mod": ["jar", "zip", "litemod"] },
+          openLabel: "添加到 mods",
+        });
+        if (!uris || uris.length === 0) {
+          return;
+        }
+        const modsDir = path.join(instance.dir, "mods");
+        fs.mkdirSync(modsDir, { recursive: true });
+        let copied = 0;
+        let skipped = 0;
+        for (const uri of uris) {
+          const target = path.join(modsDir, path.basename(uri.fsPath));
+          if (fs.existsSync(target)) {
+            skipped++;
+            continue;
+          }
+          fs.copyFileSync(uri.fsPath, target);
+          copied++;
+        }
+        const parts = [`已添加 ${copied} 个模组`];
+        if (skipped > 0) {
+          parts.push(`${skipped} 个同名已存在被跳过`);
+        }
+        void vscode.window.showInformationMessage(`VSCL：${parts.join("，")}。`);
+      },
+      pickComponent: (component) => pickComponentForInstance(component),
+      switchComponent: async (component) => {
+        void vscode.window.showInformationMessage(`VSCL：「${COMPONENT_NAME[component] ?? component}」切换版本将在后续版本实现。`);
+      },
+      removeComponent: async (component) => {
+        void vscode.window.showInformationMessage(`VSCL：「${COMPONENT_NAME[component] ?? component}」移除将在后续版本实现。`);
+      },
+      verifyInstance: () => verifySelectedInstance(),
       setOverride: async (k, v) => {
         const instance = store.selectedInstance;
         if (instance) {
@@ -647,8 +1107,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     });
     const dir = uris?.[0]?.fsPath;
     if (dir) {
-      Settings.addGameDirectory(dir);
-      Settings.setActiveGameDirectory(dir);
+      // 选择的是 .minecraft 时智能取其上级（统一存"工作目录"）
+      const normalized = normalizeWorkDir(normalizePathKey(dir));
+      Settings.addGameDirectory(normalized);
+      Settings.setActiveGameDirectory(normalized);
       await refresh();
     }
   }
@@ -659,25 +1121,34 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const javas = javasCache.length > 0 ? javasCache : detectJava();
     return {
       directory: {
-        active: store.state.activeDirectory,
+        active: store.state.activeDirectory ? normalizePathKey(displayWorkDir(store.state.activeDirectory)) : undefined,
         source: store.state.activeSource,
-        registered: Settings.gameDirectories(),
-        official: officialGameDirectory(),
+        registered: Settings.gameDirectories().map((d) => normalizePathKey(normalizeWorkDir(d))),
+        official: normalizePathKey(displayWorkDir(officialGameDirectory())),
       },
       javas: javas.map((j) => ({ exePath: j.exePath, major: j.major, version: j.version, vendor: j.vendor, source: j.source })),
       javaDefault: Settings.javaPath(),
       memory: { autoMemory: g.autoMemory, minMemory: g.minMemory, maxMemory: g.maxMemory },
       jvmArgs: g.jvmArgs,
+      windowType: g.windowType,
+      width: g.width,
+      height: g.height,
       javaPath: Settings.javaPath(),
       downloadSource: Settings.downloadSource(),
+      listSource: Settings.listSource(),
       downloadThreads: Settings.downloadThreads(),
       showLogs: Settings.showLogs(),
+      cache: (() => {
+        const dir = cacheRoot(context.globalStorageUri.fsPath);
+        const s = cacheStats(dir);
+        return { dir, sizeText: `${formatBytes(s.bytes)}（${s.files} 个文件）` };
+      })(),
       extensionVersion: String(context.extension.packageJSON.version ?? "0.0.0"),
     };
   }
 
-  /** 打开启动器设置页（自建页面；仅内置浏览器/微软 Client ID 留在原生设置） */
-  function openLauncherSettings(): void {
+  /** 打开启动器设置页（自建页面；tab 可指定初始分区） */
+  function openLauncherSettings(tab?: string): void {
     SettingsPanel.createOrShow(context, {
       getState: settingsPanelState,
       setGlobal: async (k, v) => {
@@ -727,7 +1198,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       openNativeSetting: async (query) => {
         await vscode.commands.executeCommand("workbench.action.openSettings", query);
       },
+      clearCache: async () => {
+        clearCache(cacheRoot(context.globalStorageUri.fsPath));
+      },
     });
+    if (tab) {
+      SettingsPanel.current?.switchTab(tab);
+    }
   }
 
   /** 执行系统 shell 命令（启动前/退出后钩子） */
@@ -942,23 +1419,38 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
     }),
 
-    // 页面入口占位（实例列表 / 多人联机 webview 在后续里程碑实现）
-    vscode.commands.registerCommand("vscl.openPage.instances", () =>
-      vscode.window.showInformationMessage("VSCL：实例列表页面开发中。")
-    ),
+    // 页面入口（多人联机占位；实例列表与下载中心已实现）
+    vscode.commands.registerCommand("vscl.openPage.instances", () => openInstanceList()),
     vscode.commands.registerCommand("vscl.openPage.download", () =>
       DownloadCenterPanel.createOrShow(context, {
         fetchManifest: (force) => manifestSource.fetch(force),
-        getInstalledIds: () => store.state.instances.map((i) => i.id),
-        install: (versionId) => installGameVersion(versionId),
+        getSources: () => ({ downloadSource: Settings.downloadSource(), listSource: Settings.listSource() }),
+        setSource: async (key, value) => {
+          if (key === "downloadSource" || key === "listSource") {
+            configStore.update(key, value);
+          }
+          await manifestSource.fetch(true);
+        },
+        // 「选择」：跳转安装新游戏面板并预填 MC 版本
+        install: (versionId) => {
+          openInstallNew(versionId);
+        },
       })
     ),
     vscode.commands.registerCommand("vscl.openPage.multiplayer", () =>
       vscode.window.showInformationMessage("VSCL：多人联机开发中。")
     ),
     vscode.commands.registerCommand("vscl.installModLoader", () => void installModLoader()),
+    vscode.commands.registerCommand("vscl.verifyInstance", () => void verifySelectedInstance()),
+    vscode.commands.registerCommand("vscl.clearCache", () => {
+      clearCache(cacheRoot(context.globalStorageUri.fsPath));
+      SettingsPanel.current?.refresh();
+      void vscode.window.showInformationMessage("VSCL：缓存已清理。");
+    }),
     vscode.commands.registerCommand("vscl.openInstanceSettings", () => openInstanceSettings()),
     vscode.commands.registerCommand("vscl.openLauncherSettings", () => openLauncherSettings()),
+    vscode.commands.registerCommand("vscl.openInstallNew", () => openInstallNew()),
+    vscode.commands.registerCommand("vscl.openInstanceList", () => openInstanceList()),
     vscode.commands.registerCommand("vscl.openAccountPanel", () => openAccountPanel()),
     vscode.commands.registerCommand("vscl.openAddAccountPanel", () => openAddAccountPanel()),
     vscode.commands.registerCommand("vscl.installModpack", () => void installModpackCommand())

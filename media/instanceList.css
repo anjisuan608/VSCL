@@ -1,0 +1,254 @@
+/* 实例列表面板样式（下载中心布局同款；颜色全部引用 VS Code 主题变量） */
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+  color: var(--vscode-foreground);
+  background-color: var(--vscode-editor-background);
+}
+
+.il-body {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.il-side {
+  flex-shrink: 0;
+  width: 250px;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.25));
+  background-color: var(--vscode-sideBar-background, var(--vscode-editor-background));
+}
+
+.il-side-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 0;
+}
+
+.il-side-foot {
+  flex-shrink: 0;
+  border-top: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.25));
+  padding: 6px 0;
+}
+
+.il-main {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+}
+
+.il-header {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 16px;
+  background-color: var(--vscode-editor-background);
+  border-bottom: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.2));
+}
+
+/* 「游戏目录」标题行（右侧恢复自动选择按钮） */
+.dir-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 24px;
+  padding: 6px 14px 4px 18px;
+  font-size: 12px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.dir-title-btn {
+  padding: 3px;
+  margin-right: -2px;
+}
+
+.dir-title-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+.dir-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--vscode-foreground);
+}
+
+.dir-item:hover {
+  background-color: var(--vscode-list-hoverBackground);
+}
+
+.dir-item.active {
+  background-color: var(--vscode-list-activeSelectionBackground);
+  color: var(--vscode-list-activeSelectionForeground);
+}
+
+.dir-item .name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 目录名下方完整路径小字（宽度自适应省略） */
+.dir-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.dir-path {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  opacity: 0.75;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dir-icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--vscode-descriptionForeground);
+  flex-shrink: 0;
+}
+
+.dir-item.active .dir-icon {
+  color: inherit;
+}
+
+.inst-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.1));
+  cursor: pointer;
+}
+
+.inst-row:hover {
+  background-color: var(--vscode-list-hoverBackground);
+}
+
+.inst-row.selected {
+  background-color: var(--vscode-list-activeSelectionBackground);
+  color: var(--vscode-list-activeSelectionForeground);
+}
+
+/* ── 复用下载中心公共类（本地兜底定义，避免跨面板样式依赖） ── */
+.dc-side-title {
+  padding: 8px 18px 6px;
+  font-size: 12px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.dc-resizer {
+  flex-shrink: 0;
+  width: 5px;
+  cursor: col-resize;
+  background-color: transparent;
+}
+
+.dc-resizer:hover,
+.dc-resizer.dragging {
+  background-color: var(--vscode-focusBorder);
+}
+
+.dc-empty {
+  padding: 32px;
+  text-align: center;
+  color: var(--vscode-descriptionForeground);
+}
+
+.badge {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 8px;
+  border-radius: 8px;
+  background-color: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.tool {
+  padding: 5px 14px;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 13px;
+  background-color: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tool:hover:not(:disabled) {
+  background-color: var(--vscode-button-hoverBackground);
+}
+
+.tool:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.tool.secondary {
+  background-color: var(--vscode-button-secondaryBackground, var(--vscode-input-background));
+  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+}
+
+.icon-btn {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 3px;
+  color: var(--vscode-foreground);
+  display: inline-flex;
+  opacity: 0.7;
+  flex-shrink: 0;
+}
+
+.icon-btn:hover {
+  opacity: 1;
+  background-color: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15));
+}
+
+.empty {
+  padding: 24px 16px;
+  text-align: center;
+  color: var(--vscode-descriptionForeground);
+  font-size: 12px;
+}
+
+.list-name {
+  font-weight: 600;
+  font-size: 13px;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.view-title {
+  font-size: 16px;
+  font-weight: 600;
+}
