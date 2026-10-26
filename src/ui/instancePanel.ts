@@ -69,6 +69,8 @@ export interface InstancePanelCallbacks {
   installLoader(): Promise<void>;
   /** 添加模组（jar/zip 文件选择 → 复制到 mods/） */
   addMod(): Promise<void>;
+  /** 弹出原生分辨率列表并写入宽高覆盖 */
+  pickWindowSize(): Promise<void>;
   /** 为指定组件选择版本并安装（未安装组件的「选择版本」入口） */
   pickComponent(component: string): Promise<void>;
   /** 切换组件版本（入口占位） */
@@ -140,6 +142,10 @@ export class InstancePanel {
             break;
           case "addMod":
             await self.callbacks.addMod();
+            self.pushState();
+            break;
+          case "pickWindowSize":
+            await self.callbacks.pickWindowSize();
             self.pushState();
             break;
           case "verifyInstance":
@@ -361,12 +367,12 @@ const INSTANCE_PANEL_SCRIPT = `(function () {
     },
     {
       title: '窗口',
-      desc: '预设选择会同时覆盖宽度与高度（写入实例配置）。',
+      desc: '预设按钮弹出原生分辨率列表，选择后写入宽高（自动开启覆盖）。',
       fields: [
         { key: 'windowType', label: '窗口模式', type: 'select', options: [['', '默认'], ['WINDOWED', '窗口化'], ['FULLSCREEN', '全屏'], ['MAXIMIZED', '最大化']] },
         { key: 'width', label: '窗口宽度', type: 'number' },
         { key: 'height', label: '窗口高度', type: 'number' },
-        { key: 'sizePreset', label: '尺寸预设', type: 'sizePreset' },
+        { key: 'sizePreset', label: '尺寸预设', type: 'presetButton' },
       ],
     },
     {
@@ -400,16 +406,9 @@ const INSTANCE_PANEL_SCRIPT = `(function () {
         const overridden = has(f.key);
         const val = overridden ? ov[f.key] : undefined;
         let control = '';
-        if (f.type === 'sizePreset') {
-          control = '<select data-key="' + f.key + '" ' + (overridden ? '' : 'disabled') + '>'
-            + '<option value="">选择预设…</option>'
-            + '<option value="854x480">854 × 480</option>'
-            + '<option value="1280x720">1280 × 720</option>'
-            + '<option value="1600x900">1600 × 900</option>'
-            + '<option value="1920x1080">1920 × 1080</option>'
-            + '<option value="2560x1440">2560 × 1440</option>'
-            + '<option value="3840x2160">3840 × 2160（4K）</option>'
-            + '</select>';
+        if (f.type === 'presetButton') {
+          // 预设按钮：弹原生分辨率列表（扩展侧 QuickPick），选择即写入宽高双键覆盖
+          control = '<button class="tool secondary" data-cmd="pickWindowSize">预设…</button>';
         } else if (f.type === 'javaPicker') {
           const javas = (state.global && state.global.javas) || [];
           const cur = overridden ? String(val ?? '') : '';
@@ -441,7 +440,7 @@ const INSTANCE_PANEL_SCRIPT = `(function () {
         }
         html.push('<div class="row"><div class="row-label"><div class="row-name">' + esc(f.label) + '</div></div>'
           + '<div class="row-control">'
-          + '<label class="override-toggle"><input type="checkbox" data-override="' + f.key + '" ' + (overridden ? 'checked' : '') + '> 覆盖</label>'
+          + (f.type === 'presetButton' ? '' : '<label class="override-toggle"><input type="checkbox" data-override="' + f.key + '" ' + (overridden ? 'checked' : '') + '> 覆盖</label>')
           + control + '</div></div>');
       }
       html.push('</div>');
@@ -467,15 +466,6 @@ const INSTANCE_PANEL_SCRIPT = `(function () {
         const toggle = input.closest('.row-control').querySelector('[data-override="' + key + '"]');
         if (toggle && !toggle.checked) return;
         const field = FIELDS.find((f) => f.key === key);
-        // 尺寸预设：同时覆盖 width / height 两键
-        if (field && field.type === 'sizePreset') {
-          const [w, h] = String(input.value || '').split('x');
-          if (w && h) {
-            vscode.postMessage({ cmd: 'setOverride', key: 'width', value: Number(w) });
-            vscode.postMessage({ cmd: 'setOverride', key: 'height', value: Number(h) });
-          }
-          return;
-        }
         let value = coerce(key, input);
         if (field && field.type === 'javaPicker' && input.value === '__custom__') {
           const custom = $('#settings-form').querySelector('[data-custom="' + key + '"]');

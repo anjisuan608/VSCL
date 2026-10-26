@@ -332,7 +332,9 @@ export function buildLaunchCommand(req: BuildRequest): BuildResult {
     is32: process.arch === "ia32",
     features: {
       is_demo_user: false,
-      has_custom_resolution: req.windowType === "WINDOWED" && !!req.width && !!req.height,
+      // 对齐 HMCL：恒为 false——版本 JSON 中 has_custom_resolution 门控的
+      // --width/--height 块（占位符为硬编码值）始终关闭，窗口尺寸由启动器显式传参
+      has_custom_resolution: false,
       has_quick_plays_support: !!req.quickPlay,
       is_quick_play_singleplayer: !!req.quickPlay,
       is_quick_play_multiplayer: false,
@@ -448,11 +450,13 @@ export function buildLaunchCommand(req: BuildRequest): BuildResult {
       warnings.push("当前游戏版本不支持 Quick Play，已忽略");
     }
   }
-  // 窗口模式（现代参数；老版本静默忽略防非法参数崩溃）
+  // 窗口参数（对齐 HMCL：由启动器显式传参，不受 JSON 门控）：
+  // 宽高有值即注入（windowType 未设置也生效）；全屏另行追加 --fullscreen
   if (merged.gameArgs) {
     if (req.windowType === "FULLSCREEN") {
       game.push("--fullscreen");
-    } else if (req.windowType === "WINDOWED" && req.width && req.height) {
+    }
+    if (req.width && req.height) {
       game.push("--width", String(Math.round(req.width)), "--height", String(Math.round(req.height)));
     }
     // MAXIMIZED 无 CLI 等价参数（由游戏内视频设置处理）

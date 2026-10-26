@@ -35,7 +35,7 @@ export interface InstanceOverrides {
 }
 
 /** 可被实例覆盖的配置键 */
-export type OverrideKey = "javaPath" | "minMemory" | "maxMemory" | "jvmArgs" | "quickPlay" | "icon";
+export type OverrideKey = keyof Omit<InstanceOverrides, "parent">;
 
 /** 覆盖配置文件路径：<实例目录>/.vscl/config/vsclversion.json */
 export function overrideFilePath(instanceDir: string): string {

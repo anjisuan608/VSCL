@@ -261,9 +261,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     });
     proc.onExit((code, signal) => {
       term.info(`[VSCL] 游戏退出（code=${code ?? "null"}${signal ? ` signal=${signal}` : ""}）`);
+      // 终端保留供查看完整日志（不自动关闭）；切断输入透传
+      term.onUserInput = undefined;
+      term.info("[VSCL] 游戏已退出，本终端保留供查看日志，可手动关闭");
       running.delete(instance.id);
       store.update({ runningInstanceIds: store.state.runningInstanceIds.filter((id) => id !== instance.id) });
-      void terminal?.dispose(); // 日志随终端销毁；游戏自身 logs/ 目录保留完整日志
       // 退出后命令
       if (eff.postExitCommand?.trim()) {
         runShell(eff.postExitCommand.trim());
@@ -1043,6 +1045,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         }
       },
       installLoader: () => installModLoader(),
+      pickWindowSize: async () => {
+        const size = await pickWindowSize();
+        if (size) {
+          const instance = store.selectedInstance;
+          if (instance) {
+            setOverride(instance.dir, "width", size.width);
+            setOverride(instance.dir, "height", size.height);
+          }
+        }
+      },
       addMod: async () => {
         const instance = store.selectedInstance;
         if (!instance) {
@@ -1135,6 +1147,25 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
   }
 
+  /** 窗口尺寸预设（HMCL 同款清单） */
+  const WINDOW_SIZE_PRESETS: { label: string; width: number; height: number }[] = [
+    { label: "854 × 480（低配）", width: 854, height: 480 },
+    { label: "1280 × 720（HD）", width: 1280, height: 720 },
+    { label: "1600 × 900", width: 1600, height: 900 },
+    { label: "1920 × 1080（Full HD）", width: 1920, height: 1080 },
+    { label: "2560 × 1440（2K）", width: 2560, height: 1440 },
+    { label: "3840 × 2160（4K）", width: 3840, height: 2160 },
+  ];
+
+  /** 弹出原生分辨率列表 */
+  async function pickWindowSize(): Promise<{ width: number; height: number } | undefined> {
+    const picked = await vscode.window.showQuickPick(
+      WINDOW_SIZE_PRESETS.map((p) => ({ label: p.label, width: p.width, height: p.height })),
+      { placeHolder: "选择窗口分辨率" }
+    );
+    return picked ? { width: picked.width, height: picked.height } : undefined;
+  }
+
   /** 启动器设置页状态快照（Java/目录/内存/下载） */
   function settingsPanelState(): SettingsPanelState {
     const g = Settings.globalGameSettings();
@@ -1220,6 +1251,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       },
       clearCache: async () => {
         clearCache(cacheRoot(context.globalStorageUri.fsPath));
+      },
+      pickWindowSize: async () => {
+        const size = await pickWindowSize();
+        if (size) {
+          configStore.update("width", size.width);
+          configStore.update("height", size.height);
+        }
       },
     });
     if (tab) {

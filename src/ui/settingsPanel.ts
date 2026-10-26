@@ -59,6 +59,8 @@ export interface SettingsPanelCallbacks {
   openNativeSetting(query: string): Promise<void>;
   /** 清空扩展缓存 */
   clearCache(): Promise<void>;
+  /** 弹出原生分辨率列表并写入全局宽高 */
+  pickWindowSize(): Promise<void>;
 }
 
 export class SettingsPanel {
@@ -157,6 +159,10 @@ export class SettingsPanel {
             break;
           case "clearCache":
             await self.callbacks.clearCache();
+            self.pushState();
+            break;
+          case "sizePresetGlobal":
+            await self.callbacks.pickWindowSize();
             self.pushState();
             break;
           default:
@@ -288,15 +294,7 @@ export class SettingsPanel {
           <input type="number" data-gkey="width" min="0" placeholder="宽" style="max-width: 110px;">
           <span class="row-suffix">×</span>
           <input type="number" data-gkey="height" min="0" placeholder="高" style="max-width: 110px;">
-          <select id="size-preset-global">
-            <option value="">尺寸预设…</option>
-            <option value="854x480">854 × 480</option>
-            <option value="1280x720">1280 × 720</option>
-            <option value="1600x900">1600 × 900</option>
-            <option value="1920x1080">1920 × 1080</option>
-            <option value="2560x1440">2560 × 1440</option>
-            <option value="3840x2160">3840 × 2160（4K）</option>
-          </select>
+          <button class="tool secondary" data-cmd="sizePresetGlobal">预设…</button>
         </div>
       </div>
     </div>
@@ -414,15 +412,6 @@ export class SettingsPanel {
       $('[data-gkey="' + k + '"]').addEventListener('change', (e) => {
         vscode.postMessage({ cmd: 'setGlobal', key: k, value: Number(e.target.value || 0) });
       });
-    });
-    // 尺寸预设 → 填充宽高（HMCL 同款联动）
-    $('#size-preset-global').addEventListener('change', (e) => {
-      const [w, h] = String(e.target.value || '').split('x');
-      if (!w) return;
-      $('[data-gkey="width"]').value = w;
-      $('[data-gkey="height"]').value = h;
-      vscode.postMessage({ cmd: 'setGlobal', key: 'width', value: Number(w) });
-      vscode.postMessage({ cmd: 'setGlobal', key: 'height', value: Number(h) });
     });
 
     // Java 列表（只读展示；选择在「游戏」Tab）
