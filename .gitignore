@@ -1,0 +1,20 @@
+# 第三方源码与工作文档（不入库）
+tmp/
+temp/
+
+# Node / 依赖
+node_modules/
+
+# 构建产物
+dist/
+out/
+*.vsix
+*.tsbuildinfo
+
+# 测试缓存
+.vscode-test/
+coverage/
+
+# 系统文件
+.DS_Store
+Thumbs.db
