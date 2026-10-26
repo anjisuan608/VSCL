@@ -6,6 +6,7 @@
  * 只上报用户意图并订阅本 Store，UI 之间不直接通信（星型拓扑）。
  */
 import * as vscode from "vscode";
+import type { AccountEntry } from "../auth/accounts";
 
 /** 实例信息（由 core/game/instance 扫描产生） */
 export interface InstanceInfo {
@@ -40,19 +41,26 @@ export interface State {
   selectedInstanceId?: string;
   /** 正在运行中的实例 id 列表 */
   runningInstanceIds: string[];
-  /** 已登录的微软账户名（未登录为 undefined） */
-  accountName?: string;
+  /** 账户列表 */
+  accounts: AccountEntry[];
+  /** 当前选中账户 id（undefined = 无账户，启动默认使用 Dev） */
+  selectedAccountId?: string;
 }
 
 /** 状态变更事件载荷 */
 export type StateChange = State;
 
 export class Store extends vscode.EventEmitter<StateChange> {
-  private _state: State = { instances: [], runningInstanceIds: [] };
+  private _state: State = { instances: [], runningInstanceIds: [], accounts: [] };
 
   /** 当前状态快照（只读） */
   get state(): State {
     return this._state;
+  }
+
+  /** 当前选中账户（无则 undefined；启动时回落默认用户名 Dev） */
+  get selectedAccount(): AccountEntry | undefined {
+    return this._state.accounts.find((a) => a.id === this._state.selectedAccountId);
   }
 
   /** 当前选中的实例（无则 undefined） */

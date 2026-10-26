@@ -16,6 +16,8 @@ export interface InstanceOverrides {
   parent?: string;
   icon?: string;
   javaPath?: string;
+  /** 智能内存覆盖（true=启用：minMemory 为下限；false=禁用：maxMemory 为上限） */
+  autoMemory?: boolean;
   minMemory?: number;
   maxMemory?: number;
   jvmArgs?: string[];
@@ -97,7 +99,11 @@ export function resetOverride(instanceDir: string, key: OverrideKey): void {
 
 /** 全局设置 ⊕ 实例覆盖后的生效设置 */
 export interface EffectiveGameSettings {
+  /** 智能内存开关 */
+  autoMemory: boolean;
+  /** 智能模式：下限（不得低于）；手动模式：未使用 */
   minMemory: number;
+  /** 手动模式：固定上限；智能模式：未使用（按系统内存计算） */
   maxMemory: number;
   jvmArgs: string[];
   javaPath?: string;
@@ -119,6 +125,7 @@ export interface EffectiveGameSettings {
 /** 全局设置 ⊕ 实例覆盖 → 生效配置（浅合并，数组整体替换） */
 export function effectiveSettings(global: GlobalGameSettings, overrides: InstanceOverrides): EffectiveGameSettings {
   return {
+    autoMemory: overrides.autoMemory ?? global.autoMemory,
     minMemory: overrides.minMemory ?? global.minMemory,
     maxMemory: overrides.maxMemory ?? global.maxMemory,
     jvmArgs: overrides.jvmArgs ?? global.jvmArgs,

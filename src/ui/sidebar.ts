@@ -52,7 +52,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         activeSource: s.activeSource,
         selected: selected ? { ...selected, iconUri, running: s.runningInstanceIds.includes(selected.id) } : undefined,
         instances: s.instances,
-        accountName: s.accountName,
+        accountName: this.store.selectedAccount?.username,
         latestJava: latestJava ? { major: latestJava.major, vendor: latestJava.vendor } : undefined,
       },
     });
@@ -82,6 +82,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           case "open-page":
             if (msg.arg === "instance-settings") {
               await vscode.commands.executeCommand("vscl.openInstanceSettings");
+            } else if (msg.arg === "settings") {
+              // 设置页 = 扩展自建「启动器设置」页
+              await vscode.commands.executeCommand("vscl.openLauncherSettings");
+            } else if (msg.arg === "account") {
+              await vscode.commands.executeCommand("vscl.openAccountPanel");
             } else {
               await vscode.commands.executeCommand(`vscl.openPage.${msg.arg ?? "download"}`);
             }

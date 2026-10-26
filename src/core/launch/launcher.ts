@@ -6,6 +6,7 @@
  *       JVM/game 参数段组装、内存与 log4j 注入。
  */
 import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
 import type { ArgumentEntry, MergedVersion, RawLibrary } from "./versionMerge";
 import { extractZip } from "../util/minimalZip";
@@ -27,6 +28,8 @@ export interface BuildRequest {
   instanceDir: string; // versions/<id>
   javaExe: string;
   identity: { username: string; uuid: string; accessToken: string; userType: string };
+  /** 智能内存（HMCL autoMemory 同款）：启用时 minMemory 为下限、上限按系统内存计算；禁用时 maxMemory 为固定上限 */
+  autoMemory: boolean;
   minMemory: number;
   maxMemory: number;
   extraJvmArgs: string[];
@@ -258,11 +261,19 @@ export function buildLaunchCommand(req: BuildRequest): BuildResult {
 
   // —— JVM 段 ——
   const jvm: string[] = [];
-  if (req.minMemory > 0) {
-    jvm.push(`-Xms${Math.round(req.minMemory)}M`);
-  }
-  if (req.maxMemory > 0) {
-    jvm.push(`-Xmx${Math.round(req.maxMemory)}M`);
+  if (req.autoMemory) {
+    // 智能内存（HMCL autoMemory 同款）：填写值为下限，上限按系统内存计算（50%，上限 16G）
+    const totalMB = Math.floor(os.totalmem() / 1024 / 1024);
+    const smartMax = Math.max(Math.min(Math.floor(totalMB * 0.5), 16384), req.minMemory);
+    if (req.minMemory > 0) {
+      jvm.push(`-Xms${Math.round(req.minMemory)}M`);
+    }
+    jvm.push(`-Xmx${smartMax}M`);
+  } else {
+    // 手动：填写值为固定上限（-Xms 交由 JVM 自管）
+    if (req.maxMemory > 0) {
+      jvm.push(`-Xmx${Math.round(req.maxMemory)}M`);
+    }
   }
   // log4j 配置注入（配置文件位于 assets/log_configs/<id>，缺失则跳过并提示）
   if (merged.loggingArgument && merged.loggingFileId) {

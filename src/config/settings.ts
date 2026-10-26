@@ -6,8 +6,10 @@
  */
 import * as vscode from "vscode";
 
-/** 全局游戏设置（原生设置界面管理的单例配置） */
+/** 全局游戏设置（数据仍存配置系统，仅 UI 自建页面） */
 export interface GlobalGameSettings {
+  /** 智能内存（HMCL autoMemory 同款）：启用时 minMemory 为下限、上限按系统内存计算；禁用时 maxMemory 为固定上限 */
+  autoMemory: boolean;
   minMemory: number;
   maxMemory: number;
   jvmArgs: string[];
@@ -46,15 +48,11 @@ export namespace Settings {
   /** 全局游戏设置（vscl.game.*） */
   export function globalGameSettings(): GlobalGameSettings {
     return {
+      autoMemory: cfg().get<boolean>("game.autoMemory", true),
       minMemory: cfg().get<number>("game.minMemory", 512),
       maxMemory: cfg().get<number>("game.maxMemory", 4096),
       jvmArgs: cfg().get<string[]>("game.jvmArgs", []),
     };
-  }
-
-  /** 离线登录用户名 */
-  export function offlineUsername(): string {
-    return cfg().get<string>("offlineUsername", "Steve");
   }
 
   /** 启动游戏时打开日志终端 */

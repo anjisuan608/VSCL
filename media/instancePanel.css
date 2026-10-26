@@ -358,6 +358,47 @@ button.tool.secondary:hover {
   font-weight: 600;
 }
 
+/* ── 账户页（列表 / 添加账户双面板共用） ── */
+.view-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+  gap: 12px;
+}
+
+.view-title {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.acct-row.selected {
+  background-color: var(--vscode-list-activeSelectionBackground);
+  color: var(--vscode-list-activeSelectionForeground);
+}
+
+.radio {
+  accent-color: var(--vscode-focusBorder);
+  cursor: pointer;
+}
+
+.auth-input {
+  display: flex;
+  gap: 10px;
+  padding: 4px 16px 14px;
+}
+
+.auth-input input {
+  flex: 1;
+}
+
+.placeholder-box {
+  padding: 32px 16px;
+  text-align: center;
+  color: var(--vscode-descriptionForeground);
+  line-height: 1.8;
+}
+
 /* 实例头 */
 .instance-head {
   display: flex;

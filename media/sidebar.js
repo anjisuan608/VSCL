@@ -10,9 +10,9 @@
   function render() {
     const { activeDirectory, activeSource, selected, instances, accountName } = state;
 
-    // 账户卡
-    $("#account-name").textContent = accountName || "未登录";
-    $("#account-sub").textContent = accountName ? "微软账户 · 点击管理" : "点击登录微软账户 / 管理";
+    // 账户卡（无账户时默认以 Dev 离线启动）
+    $("#account-name").textContent = accountName || "Dev";
+    $("#account-sub").textContent = accountName ? "点击管理账户列表" : "未添加账户 · 默认以 Dev 离线启动";
 
     // 目录行
     $("#dir-path").textContent = activeDirectory || "（未检测到游戏目录）";

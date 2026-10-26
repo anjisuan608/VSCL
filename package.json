@@ -83,8 +83,12 @@
         "title": "VSCL: 打开实例设置"
       },
       {
-        "command": "vscl.account.manage",
-        "title": "VSCL: 账户管理（微软登录）"
+        "command": "vscl.openLauncherSettings",
+        "title": "VSCL: 打开启动器设置"
+      },
+      {
+        "command": "vscl.openAccountPanel",
+        "title": "VSCL: 账户列表（添加/切换账户）"
       },
       {
         "command": "vscl.installModpack",
@@ -94,91 +98,17 @@
     "configuration": {
       "title": "VSCL",
       "properties": {
-        "vscl.javaPath": {
-          "type": "string",
-          "scope": "machine",
-          "markdownDescription": "手动指定 Java 可执行文件路径。**留空**时自动检测（PATH、`JAVA_HOME`、各平台标准安装目录、官方启动器 runtime）。",
-          "default": ""
-        },
-        "vscl.gameDirectories": {
-          "type": "array",
-          "scope": "machine",
-          "items": {
-            "type": "string"
-          },
-          "markdownDescription": "额外注册的游戏目录（`.minecraft`）。使用「VSCL: 添加游戏目录」命令管理。",
-          "default": []
-        },
-        "vscl.activeGameDirectory": {
-          "type": "string",
-          "scope": "machine",
-          "markdownDescription": "当前激活的游戏目录。**留空**时按优先级自动选择：工作区文件夹（检测命中）> 官方启动器目录。",
-          "default": ""
-        },
         "vscl.useIntegratedBrowser": {
           "type": "boolean",
           "scope": "machine",
-          "markdownDescription": "是否使用 VS Code 内置浏览器（Simple Browser）打开链接。账户登录等敏感链接始终使用系统浏览器。",
+          "markdownDescription": "是否使用 VS Code 内置浏览器（Simple Browser）打开链接。账户登录等敏感链接始终使用系统浏览器。**其余 VSCL 设置在扩展自有设置页中配置**（侧栏「设置」）。",
           "default": false
-        },
-        "vscl.downloadSource": {
-          "type": "string",
-          "enum": [
-            "official",
-            "bmclapi"
-          ],
-          "enumDescriptions": [
-            "Mojang / 官方源",
-            "BMCLAPI 镜像（国内加速）"
-          ],
-          "scope": "machine",
-          "description": "文件下载源",
-          "default": "bmclapi"
-        },
-        "vscl.offlineUsername": {
-          "type": "string",
-          "scope": "machine",
-          "markdownDescription": "离线登录用户名（用于生成离线 UUID；微软账户登录功能开发中）。",
-          "default": "Steve"
-        },
-        "vscl.showLogs": {
-          "type": "boolean",
-          "scope": "machine",
-          "markdownDescription": "启动游戏时在终端区打开游戏日志终端。",
-          "default": true
         },
         "vscl.microsoftClientId": {
           "type": "string",
           "scope": "machine",
           "markdownDescription": "微软登录用的 Azure Application 客户端 ID（公共客户端 / 移动与桌面）。在 [Azure 门户](https://portal.azure.com) 注册应用获取；留空则仅支持离线启动。",
           "default": ""
-        },
-        "vscl.downloadThreads": {
-          "type": "number",
-          "scope": "machine",
-          "markdownDescription": "并发下载线程数（资源/库批量下载）。",
-          "default": 16
-        },
-        "vscl.game.minMemory": {
-          "type": "number",
-          "scope": "machine",
-          "markdownDescription": "全局游戏设置：最小内存（MB）。实例可在 `.vscl/config/vsclversion.json` 中覆盖。",
-          "default": 512
-        },
-        "vscl.game.maxMemory": {
-          "type": "number",
-          "scope": "machine",
-          "markdownDescription": "全局游戏设置：最大内存（MB）。实例可在 `.vscl/config/vsclversion.json` 中覆盖。",
-          "default": 4096
-        },
-        "vscl.game.jvmArgs": {
-          "type": "array",
-          "scope": "machine",
-          "items": {
-            "type": "string"
-          },
-          "markdownDescription": "全局游戏设置：额外 JVM 参数。实例可在 `.vscl/config/vsclversion.json` 中覆盖（整体替换）。",
-          "default": []
         }
       }
     },

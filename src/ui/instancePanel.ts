@@ -20,17 +20,15 @@ export interface InstancePanelState {
         running: boolean;
       }
     | undefined;
-  /** 全局设置（编辑全局模式使用） */
+  /** 全局参考值（展示"跟随全局"提示用） */
   global: {
     minMemory: number;
     maxMemory: number;
     jvmArgs: string[];
     javaPath: string;
-    offlineUsername: string;
     downloadSource: string;
     downloadThreads: number;
     showLogs: boolean;
-    useIntegratedBrowser: boolean;
   };
   overrides: Record<string, unknown>;
   mods: {
@@ -190,9 +188,8 @@ export class InstancePanel {
   </div>
 
   <div class="page" id="page-settings">
-    <div class="segmented" id="settings-mode">
-      <span class="seg active" data-mode="instance">实例设置</span>
-      <span class="seg" data-mode="global">全局游戏设置</span>
+    <div class="toolbar">
+      <button class="tool secondary" data-cmd="openLauncherSettings">全局游戏设置 / 启动器设置…</button>
     </div>
     <div class="instance-head" id="instance-head"></div>
     <div id="settings-form"></div>
@@ -307,10 +304,11 @@ const INSTANCE_PANEL_SCRIPT = `(function () {
       ],
     },
     {
-      title: '内存', desc: '单位 MB。留空继承全局设置（vscl.game.minMemory / maxMemory）。',
+      title: '内存', desc: '智能内存启用时填写值为下限（自动分配不低于此值）；禁用时填写值为固定上限。留空继承全局设置。',
       fields: [
-        { key: 'minMemory', label: '最小内存 (-Xms)', type: 'number' },
-        { key: 'maxMemory', label: '最大内存 (-Xmx)', type: 'number' },
+        { key: 'autoMemory', label: '智能内存', type: 'bool' },
+        { key: 'minMemory', label: '最小内存 / 智能下限 (MB)', type: 'number' },
+        { key: 'maxMemory', label: '最大内存 / 手动上限 (MB)', type: 'number' },
       ],
     },
     {
@@ -345,85 +343,7 @@ const INSTANCE_PANEL_SCRIPT = `(function () {
     },
   ];
 
-  // ── 游戏设置：实例覆盖模式 / 全局模式（HMCL 全局游戏设置同款布局） ──
-  let settingsMode = 'instance';
-  let lastState;
-  document.querySelectorAll('.seg[data-mode]').forEach((s) =>
-    s.addEventListener('click', () => {
-      document.querySelectorAll('.seg[data-mode]').forEach((x) => x.classList.toggle('active', x === s));
-      settingsMode = s.dataset.mode;
-      $('#instance-head').style.display = settingsMode === 'global' ? 'none' : '';
-      renderSettings(lastState);
-    })
-  );
-
-  const GLOBAL_SECTIONS = [
-    {
-      title: '游戏（全局默认）', desc: '所有未被实例覆盖的项继承此处设置；单个实例可在「实例设置」模式中覆盖。',
-      fields: [
-        { key: 'minMemory', label: '最小内存 (-Xms, MB)', type: 'number' },
-        { key: 'maxMemory', label: '最大内存 (-Xmx, MB)', type: 'number' },
-        { key: 'jvmArgs', label: 'JVM 参数', type: 'lines', placeholder: '每行一个' },
-        { key: 'javaPath', label: 'Java 路径', type: 'text', placeholder: '留空自动检测' },
-        { key: 'offlineUsername', label: '离线用户名', type: 'text' },
-        { key: 'showLogs', label: '启动时打开日志终端', type: 'check' },
-      ],
-    },
-    {
-      title: '下载',
-      fields: [
-        { key: 'downloadSource', label: '下载源', type: 'select', options: [['bmclapi', 'BMCLAPI 镜像（国内加速）'], ['official', '官方源']] },
-        { key: 'downloadThreads', label: '下载线程数', type: 'number' },
-        { key: 'useIntegratedBrowser', label: '使用内置浏览器打开链接', type: 'check' },
-      ],
-    },
-  ];
-
-  function renderGlobalSettings(state) {
-    const g = state.global || {};
-    const html = [];
-    for (const sec of GLOBAL_SECTIONS) {
-      html.push('<div class="section"><div class="section-title">' + esc(sec.title) + '</div>');
-      if (sec.desc) html.push('<div class="section-desc">' + esc(sec.desc) + '</div>');
-      for (const f of sec.fields) {
-        const val = g[f.key];
-        let control;
-        if (f.type === 'select') {
-          control = '<select data-gkey="' + f.key + '">'
-            + f.options.map(([v, t]) => '<option value="' + esc(v) + '"' + (String(val) === v ? ' selected' : '') + '>' + esc(t) + '</option>').join('')
-            + '</select>';
-        } else if (f.type === 'check') {
-          control = '<label class="override-toggle"><input type="checkbox" data-gkey="' + f.key + '" ' + (val ? 'checked' : '') + '> 启用</label>';
-        } else if (f.type === 'lines') {
-          control = '<textarea data-gkey="' + f.key + '" placeholder="' + esc(f.placeholder || '') + '">' + esc((val || []).join('\\n')) + '</textarea>';
-        } else {
-          control = '<input type="' + (f.type === 'number' ? 'number' : 'text') + '" data-gkey="' + f.key + '" value="' + esc(val ?? '') + '" placeholder="' + esc(f.placeholder || '') + '">';
-        }
-        html.push('<div class="row"><div class="row-label"><div class="row-name">' + esc(f.label) + '</div></div>'
-          + '<div class="row-control">' + control + '</div></div>');
-      }
-      html.push('</div>');
-    }
-    $('#settings-form').innerHTML = html.join('');
-    $('#settings-form').querySelectorAll('[data-gkey]').forEach((input) => {
-      input.addEventListener('change', () => {
-        const field = GLOBAL_SECTIONS.flatMap((s) => s.fields).find((f) => f.key === input.dataset.gkey);
-        const v = field.type === 'lines' ? String(input.value).split('\\n').filter(Boolean)
-          : field.type === 'number' ? Number(input.value || 0)
-          : field.type === 'check' ? input.checked
-          : String(input.value);
-        vscode.postMessage({ cmd: 'setGlobal', key: field.key, value: v });
-      });
-    });
-  }
-
   function renderSettings(state) {
-    lastState = state;
-    if (settingsMode === 'global') {
-      renderGlobalSettings(state);
-      return;
-    }
-    const g = state.global || {};
     const ov = state.overrides || {};
     const has = (k) => Object.prototype.hasOwnProperty.call(ov, k);
     const html = [];

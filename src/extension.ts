@@ -10,13 +10,14 @@ import * as path from "path";
 import * as vscode from "vscode";
 import { Settings } from "./config/settings";
 import { Store } from "./core/state/store";
-import { resolveActiveDirectory } from "./core/game/gameDirectory";
+import { resolveActiveDirectory, officialGameDirectory, isSameDirectory } from "./core/game/gameDirectory";
 import { scanInstances } from "./core/game/instance";
 import { effectiveSettings, loadOverrides, setOverride, resetOverride, OverrideKey } from "./core/game/instanceConfig";
 import { probeInstanceIcon, readIconDataUri } from "./core/game/instanceIcon";
 import { detectJava, JavaInstall } from "./core/java/javaDetector";
 import { javaSatisfies } from "./core/java/javaVersion";
 import { offlineIdentity } from "./core/auth/offline";
+import { AccountStore, AccountEntry, DEFAULT_USERNAME } from "./core/auth/accounts";
 import { loginWithMicrosoft, refreshMicrosoft, MsCredential } from "./core/auth/microsoft";
 import { mergeVersion } from "./core/launch/versionMerge";
 import { buildLaunchCommand } from "./core/launch/launcher";
@@ -27,6 +28,8 @@ import { installMrpack, readMrpackIndex } from "./core/modpack/mrpack";
 import { GameTerminal } from "./ui/gameTerminal";
 import { DownloadCenterPanel } from "./ui/downloadCenter";
 import { InstancePanel, InstancePanelState, FolderKind } from "./ui/instancePanel";
+import { SettingsPanel, SettingsPanelState } from "./ui/settingsPanel";
+import { AccountPanel, AccountPanelState, AddAccountPanel } from "./ui/accountPanel";
 import { SidebarProvider } from "./ui/sidebar";
 import { listMods, setModEnabled, deleteMod, modsDirOf } from "./core/mod/modManager";
 import { fetchLoaderVersions, installFabricLike, FabricLike } from "./core/modloader/fabricFamily";
@@ -34,7 +37,6 @@ import { fetchForgeFamilyVersions, installForgeFamily, ForgeFamily } from "./cor
 import { spawnSync } from "child_process";
 
 const SELECTED_INSTANCE_KEY = "vscl.selectedInstance";
-const MS_CREDENTIAL_KEY = "vscl.msCredential";
 
 /** 运行中的实例（进程 + 终端句柄） */
 const running = new Map<string, { proc: GameProcess; term: GameTerminal }>();
@@ -145,6 +147,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         instanceDir: instance.dir,
         javaExe,
         identity,
+        autoMemory: eff.autoMemory,
         minMemory: eff.minMemory,
         maxMemory: eff.maxMemory,
         extraJvmArgs: eff.jvmArgs,
@@ -209,81 +212,39 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (s.selectedInstanceId) {
         void context.workspaceState.update(SELECTED_INSTANCE_KEY, s.selectedInstanceId);
       }
-      // 实例设置面板随选中实例/运行状态刷新
+      // 面板随选中实例/运行状态/设置变更刷新
       InstancePanel.current?.refresh();
       InstancePanel.current?.updateTitle(s.selectedInstanceId);
+      SettingsPanel.current?.refresh();
     })
   );
 
-  /** 载入微软凭据（SecretStorage） */
-  async function loadCredential(): Promise<MsCredential | undefined> {
-    const raw = await context.secrets.get(MS_CREDENTIAL_KEY);
-    if (!raw) {
-      return undefined;
-    }
-    try {
-      return JSON.parse(raw) as MsCredential;
-    } catch {
-      return undefined;
-    }
+  /** 账户库（globalStorage 元数据 + SecretStorage 令牌 + workspaceState 选中） */
+  const accountStore = new AccountStore(context);
+
+  /** 刷新账户列表到 Store（无选中时回落列表首项） */
+  async function refreshAccounts(): Promise<void> {
+    const accounts = accountStore.load();
+    const persisted = accountStore.getSelectedId();
+    const selectedAccountId = accounts.some((a) => a.id === persisted) ? persisted : accounts[0]?.id;
+    store.update({ accounts, selectedAccountId });
   }
 
-  /** 保存/清除微软凭据并同步状态 */
-  async function saveCredential(cred: MsCredential | undefined): Promise<void> {
-    if (cred) {
-      await context.secrets.store(MS_CREDENTIAL_KEY, JSON.stringify(cred));
-    } else {
-      await context.secrets.delete(MS_CREDENTIAL_KEY);
-    }
-    store.update({ accountName: cred?.username });
+  /** 选中账户（持久化 + 广播） */
+  async function selectAccount(id: string): Promise<void> {
+    await accountStore.setSelectedId(id);
+    store.update({ selectedAccountId: id });
   }
 
-  /** 解析启动身份：微软账户优先（过期自动刷新），失败/未登录回落离线 */
-  async function resolveIdentity(): Promise<{ username: string; uuid: string; accessToken: string; userType: string }> {
-    const clientId = Settings.microsoftClientId();
-    if (clientId) {
-      const cred = await loadCredential();
-      if (cred) {
-        try {
-          let valid = cred;
-          if (cred.expiresAt < Date.now() + 60_000) {
-            const refreshed = await refreshMicrosoft(clientId, cred.refreshToken);
-            if (!refreshed) {
-              throw new Error("令牌刷新被拒绝");
-            }
-            valid = { ...cred, accessToken: refreshed.accessToken, refreshToken: refreshed.refreshToken, expiresAt: Date.now() + 24 * 3600 * 1000 };
-            await saveCredential(valid);
-          }
-          return { username: valid.username, uuid: valid.uuid, accessToken: valid.accessToken, userType: "msa" };
-        } catch (e) {
-          void vscode.window.showWarningMessage(
-            `VSCL：微软令牌刷新失败（${e instanceof Error ? e.message : String(e)}），回落离线启动。`
-          );
-        }
-      }
-    }
-    return offlineIdentity(Settings.offlineUsername());
+  /** 添加离线账户并选中（刷新列表状态） */
+  async function addOfflineAccount(username: string): Promise<void> {
+    const entry = accountStore.add(AccountStore.offlineEntry(username));
+    await selectAccount(entry.id);
+    await refreshAccounts();
   }
 
-  /** 账户管理：登录/退出（设备码流程） */
-  async function accountManage(): Promise<void> {
-    const cred = await loadCredential();
-    const items = cred
-      ? [
-          { label: `$(account) ${cred.username}`, description: "微软账户（正版验证）", action: "" },
-          { label: "$(refresh) 重新登录", action: "login" },
-          { label: "$(sign-out) 退出登录", action: "logout" },
-        ]
-      : [{ label: "$(sign-in) 登录微软账户", description: "需要配置 vscl.microsoftClientId", action: "login" }];
-    const pick = await vscode.window.showQuickPick(items, { placeHolder: "账户管理" });
-    if (!pick || !pick.action) {
-      return;
-    }
-    if (pick.action === "logout") {
-      await saveCredential(undefined);
-      void vscode.window.showInformationMessage("VSCL：已退出登录，启动将使用离线身份。");
-      return;
-    }
+  /** 添加微软账户（设备码流程）并选中 */
+  async function addMicrosoftAccount(): Promise<void> {
     const clientId = Settings.microsoftClientId();
     if (!clientId) {
       const choice = await vscode.window.showInformationMessage(
@@ -297,7 +258,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
     try {
       await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: "VSCL：微软登录进行中…", cancellable: false }, async () => {
-        const newCred = await loginWithMicrosoft(clientId, (p) => {
+        const cred = await loginWithMicrosoft(clientId, (p) => {
           void (async () => {
             const choice = await vscode.window.showInformationMessage(
               `VSCL：请在浏览器输入代码：${p.userCode}`,
@@ -312,12 +273,88 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             }
           })();
         });
-        await saveCredential(newCred);
+        const entry = accountStore.add({ type: "microsoft", username: cred.username, uuid: cred.uuid });
+        await accountStore.saveMsCredential(entry.id, cred);
+        await selectAccount(entry.id);
+        await refreshAccounts();
       });
-      void vscode.window.showInformationMessage(`VSCL：已登录 ${store.state.accountName ?? ""}，启动将使用正版验证。`);
+      void vscode.window.showInformationMessage(`VSCL：已添加微软账户 ${store.selectedAccount?.username ?? ""}，启动将使用正版验证。`);
     } catch (e) {
       void vscode.window.showErrorMessage(`VSCL：登录失败——${e instanceof Error ? e.message : String(e)}`);
     }
+  }
+
+  /** 解析启动身份：选中账户驱动；无账户默认以 Dev 离线启动 */
+  async function resolveIdentity(): Promise<{ username: string; uuid: string; accessToken: string; userType: string }> {
+    const entry = store.selectedAccount;
+    if (entry?.type === "microsoft") {
+      const clientId = Settings.microsoftClientId();
+      const cred = clientId ? await accountStore.loadMsCredential(entry.id) : undefined;
+      if (cred) {
+        try {
+          let valid: MsCredential = cred;
+          if (cred.expiresAt < Date.now() + 60_000) {
+            const refreshed = await refreshMicrosoft(clientId, cred.refreshToken);
+            if (!refreshed) {
+              throw new Error("令牌刷新被拒绝");
+            }
+            valid = { ...cred, accessToken: refreshed.accessToken, refreshToken: refreshed.refreshToken, expiresAt: Date.now() + 24 * 3600 * 1000 };
+            await accountStore.saveMsCredential(entry.id, valid);
+          }
+          return { username: entry.username, uuid: entry.uuid, accessToken: valid.accessToken, userType: "msa" };
+        } catch (e) {
+          void vscode.window.showWarningMessage(
+            `VSCL：微软令牌刷新失败（${e instanceof Error ? e.message : String(e)}），回落离线启动 ${entry.username}。`
+          );
+        }
+      } else if (!clientId) {
+        void vscode.window.showWarningMessage("VSCL：微软账户需要配置 Client ID，回落离线启动。");
+      }
+      return offlineIdentity(entry.username);
+    }
+    if (entry?.type === "offline") {
+      return offlineIdentity(entry.username);
+    }
+    return offlineIdentity(DEFAULT_USERNAME); // 无账户：Dev
+  }
+
+  /** 打开「添加账户」标签 */
+  function openAddAccountPanel(): void {
+    AddAccountPanel.createOrShow(context, {
+      getClientIdConfigured: () => !!Settings.microsoftClientId(),
+      addOffline: (username) => addOfflineAccount(username),
+      addMicrosoft: () => addMicrosoftAccount(),
+      openNativeSetting: async (query) => {
+        await vscode.commands.executeCommand("workbench.action.openSettings", query);
+      },
+      openList: () => openAccountPanel(),
+    });
+  }
+
+  /** 打开账户列表页（单选） */
+  function openAccountPanel(): void {
+    AccountPanel.createOrShow(context, {
+      getState: (): AccountPanelState => ({
+        accounts: store.state.accounts.map((a) => ({ id: a.id, type: a.type, username: a.username, uuid: a.uuid })),
+        selectedId: store.state.selectedAccountId,
+        clientIdConfigured: !!Settings.microsoftClientId(),
+      }),
+      select: (id) => selectAccount(id),
+      remove: async (id) => {
+        const target: AccountEntry | undefined = store.state.accounts.find((a) => a.id === id);
+        const choice = await vscode.window.showWarningMessage(
+          `删除账户「${target?.username ?? id}」？${target?.type === "microsoft" ? "（其登录令牌一并清除）" : ""}`,
+          { modal: true },
+          "删除"
+        );
+        if (choice !== "删除") {
+          return;
+        }
+        await accountStore.remove(id);
+        await refreshAccounts();
+      },
+      openAdd: () => openAddAccountPanel(),
+    });
   }
 
   /** 安装 mrpack 整合包（选择文件 → 确认 → 安装） */
@@ -474,11 +511,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         maxMemory: global.maxMemory,
         jvmArgs: global.jvmArgs,
         javaPath: Settings.javaPath(),
-        offlineUsername: Settings.offlineUsername(),
         downloadSource: Settings.downloadSource(),
         downloadThreads: Settings.downloadThreads(),
         showLogs: Settings.showLogs(),
-        useIntegratedBrowser: Settings.useIntegratedBrowser(),
       },
       overrides,
       mods,
@@ -499,7 +534,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     maxMemory: "game.maxMemory",
     jvmArgs: "game.jvmArgs",
     javaPath: "javaPath",
-    offlineUsername: "offlineUsername",
     downloadSource: "downloadSource",
     downloadThreads: "downloadThreads",
     showLogs: "showLogs",
@@ -507,8 +541,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   /** 打开实例设置面板（命令/侧栏实例卡入口） */
-  function openInstanceSettings(): void {
-    InstancePanel.createOrShow(context, {
+  function openInstanceSettings(): void {    InstancePanel.createOrShow(context, {
       getState: instancePanelState,
       toggleMod: async (p) => {
         const entry = findModByPath(p);
@@ -555,6 +588,76 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         if (configKey) {
           await vscode.workspace.getConfiguration("vscl").update(configKey, v, vscode.ConfigurationTarget.Global);
         }
+      },
+    });
+  }
+
+  /** 启动器设置页状态快照（目录/内存/下载/账户） */
+  function settingsPanelState(): SettingsPanelState {
+    const g = Settings.globalGameSettings();
+    return {
+      directory: {
+        active: store.state.activeDirectory,
+        source: store.state.activeSource,
+        registered: Settings.gameDirectories(),
+        official: officialGameDirectory(),
+      },
+      memory: { autoMemory: g.autoMemory, minMemory: g.minMemory, maxMemory: g.maxMemory },
+      jvmArgs: g.jvmArgs,
+      javaPath: Settings.javaPath(),
+      downloadSource: Settings.downloadSource(),
+      downloadThreads: Settings.downloadThreads(),
+      showLogs: Settings.showLogs(),
+      extensionVersion: String(context.extension.packageJSON.version ?? "0.0.0"),
+    };
+  }
+
+  /** 打开启动器设置页（自建页面；仅内置浏览器/微软 Client ID 留在原生设置） */
+  function openLauncherSettings(): void {
+    SettingsPanel.createOrShow(context, {
+      getState: settingsPanelState,
+      setGlobal: async (k, v) => {
+        const configKey = GLOBAL_SETTING_KEYS[k];
+        if (configKey) {
+          await vscode.workspace.getConfiguration("vscl").update(configKey, v, vscode.ConfigurationTarget.Global);
+        }
+      },
+      setMemory: async (mode, value) => {
+        const cfg = vscode.workspace.getConfiguration("vscl");
+        await cfg.update("game.autoMemory", mode === "auto", vscode.ConfigurationTarget.Global);
+        await cfg.update(mode === "auto" ? "game.minMemory" : "game.maxMemory", value, vscode.ConfigurationTarget.Global);
+      },
+      addDirectory: async () => {
+        const uris = await vscode.window.showOpenDialog({
+          canSelectFolders: true,
+          canSelectFiles: false,
+          canSelectMany: false,
+          openLabel: "添加为游戏目录",
+        });
+        const dir = uris?.[0]?.fsPath;
+        if (dir) {
+          await Settings.addGameDirectory(dir);
+          await Settings.setActiveGameDirectory(dir);
+          await refresh();
+        }
+      },
+      activateDirectory: async (p) => {
+        await Settings.setActiveGameDirectory(p);
+        await refresh();
+      },
+      removeDirectory: async (p) => {
+        await Settings.removeGameDirectory(p);
+        if (store.state.activeDirectory && isSameDirectory(store.state.activeDirectory, p)) {
+          await Settings.setActiveGameDirectory("");
+        }
+        await refresh();
+      },
+      resetAutoDirectory: async () => {
+        await Settings.setActiveGameDirectory("");
+        await refresh();
+      },
+      openNativeSetting: async (query) => {
+        await vscode.commands.executeCommand("workbench.action.openSettings", query);
       },
     });
   }
@@ -767,19 +870,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     ),
     vscode.commands.registerCommand("vscl.installModLoader", () => void installModLoader()),
     vscode.commands.registerCommand("vscl.openInstanceSettings", () => openInstanceSettings()),
-    vscode.commands.registerCommand("vscl.account.manage", () => void accountManage()),
+    vscode.commands.registerCommand("vscl.openLauncherSettings", () => openLauncherSettings()),
+    vscode.commands.registerCommand("vscl.openAccountPanel", () => openAccountPanel()),
+    vscode.commands.registerCommand("vscl.openAddAccountPanel", () => openAddAccountPanel()),
     vscode.commands.registerCommand("vscl.installModpack", () => void installModpackCommand())
   );
 
-  // 首次激活：解析目录与实例
+  // 首次激活：解析目录与实例、加载账户列表
   await refresh();
-
-  // 恢复已登录账户状态显示（凭据本身在 SecretStorage）
-  void loadCredential().then((cred) => {
-    if (cred) {
-      store.update({ accountName: cred.username });
-    }
-  });
+  await refreshAccounts();
 
   // 监听设置变化：游戏目录注册表/激活目录变更后自动刷新
   context.subscriptions.push(
