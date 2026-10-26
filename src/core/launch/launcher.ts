@@ -10,6 +10,8 @@ import * as os from "os";
 import * as path from "path";
 import type { ArgumentEntry, MergedVersion, RawLibrary } from "./versionMerge";
 import { extractZip } from "../util/minimalZip";
+import { DownloadPool, downloadWithFallback } from "../download/downloader";
+import { mapUrl } from "../download/mirror";
 
 /** 规则匹配所需的上下文特征（含 Mojang 的 features 门控语义） */
 export interface RuleFeatures {
@@ -213,6 +215,111 @@ export function prepareNatives(merged: MergedVersion, gameDir: string, instanceD
     }
   }
   return { dir: nativesDir, warnings };
+}
+
+/**
+ * 启动前完整性补全（XMCL diagnose+repair 同思路的启动集成）：
+ *  - 资产对象：读本地 asset index，存在性检查（毫秒级，不做全量 hash），仅下载缺失
+ *    （修复 HMCL 安装实例的语言文件等资产缺失 → 游戏回退英文）
+ *  - classpath 库：逐项存在性检查，缺失者按合并 JSON 的下载源补下（镜像优先、官方回落）
+ * 全部文件已就位时快速返回（仅少量 existsSync 开销）。
+ */
+export async function ensureGameFiles(opts: {
+  gameDir: string;
+  merged: MergedVersion;
+  /** buildLaunchCommand 构建的 classpath 绝对路径列表 */
+  classpath: string[];
+  source: "official" | "bmclapi";
+  threads: number;
+  onProgress?: (message: string) => void;
+}): Promise<{ missingAssets: number; downloadedAssets: number; missingLibs: number; downloadedLibs: number }> {
+  const { gameDir, merged, classpath, source, threads } = opts;
+  const map = (url: string) => mapUrl(url, source);
+  const tasks: Promise<void>[] = [];
+  let downloadedAssets = 0;
+  let missingAssets = 0;
+
+  // ── 资产对象（存在性） ──
+  const indexFile = merged.assetIndexId ? path.join(gameDir, "assets", "indexes", `${merged.assetIndexId}.json`) : undefined;
+  if (indexFile) {
+    if (!fs.existsSync(indexFile) && merged.assetIndexUrl) {
+      opts.onProgress?.("下载资源索引…");
+      await downloadWithFallback(map(merged.assetIndexUrl), merged.assetIndexUrl, indexFile, { sha1: merged.assetIndexSha1 });
+    }
+    try {
+      const index = JSON.parse(fs.readFileSync(indexFile!, "utf8")) as { objects?: Record<string, { hash: string }> };
+      const missing: { hash: string }[] = [];
+      for (const obj of Object.values(index.objects ?? {})) {
+        if (!fs.existsSync(path.join(gameDir, "assets", "objects", obj.hash.slice(0, 2), obj.hash))) {
+          missing.push(obj);
+        }
+      }
+      missingAssets = missing.length;
+      if (missing.length > 0) {
+        opts.onProgress?.(`补齐缺失资源 ${missing.length} 个…`);
+        const pool = new DownloadPool(Math.max(1, threads));
+        for (const obj of missing) {
+          const officialUrl = `https://resources.download.minecraft.net/${obj.hash.slice(0, 2)}/${obj.hash}`;
+          tasks.push(
+            pool
+              .run(() => downloadWithFallback(map(officialUrl), officialUrl, path.join(gameDir, "assets", "objects", obj.hash.slice(0, 2), obj.hash), { sha1: obj.hash, retries: 2 }))
+              .then(() => {
+                downloadedAssets++;
+              })
+              .catch(() => {
+                /* 单个资源失败不阻断启动 */
+              })
+          );
+        }
+      }
+    } catch {
+      /* index 不可读时跳过（游戏会自行报错） */
+    }
+  }
+
+  // ── classpath 库（存在性） ──
+  const missingLibs = classpath.filter((p) => !fs.existsSync(p));
+  if (missingLibs.length > 0) {
+    opts.onProgress?.(`补齐缺失依赖库 ${missingLibs.length} 个…`);
+    // 按合并 JSON 的库声明推导缺失库的下载地址
+    const relRoot = path.join(gameDir, "libraries");
+    const libOf = new Map<string, RawLibrary>();
+    for (const lib of merged.libraries) {
+      if (!lib.name) {
+        continue;
+      }
+      const parts = lib.name.split(":");
+      if (parts.length < 3) {
+        continue;
+      }
+      const [g, a, v] = parts;
+      const cls = parts[3];
+      const file = cls ? `${a}-${v}-${cls}.jar` : `${a}-${v}.jar`;
+      libOf.set(path.join(relRoot, g.replace(/\./g, "/"), a, v, file), lib);
+    }
+    const pool = new DownloadPool(Math.max(1, threads));
+    let downloadedLibs = 0;
+    for (const p of missingLibs) {
+      const lib = libOf.get(path.normalize(p));
+      const rel = path.relative(relRoot, p).replace(/\\/g, "/");
+      const base =
+        lib?.downloads?.artifact?.url ??
+        (lib?.url ? `${lib.url.endsWith("/") ? lib.url : `${lib.url}/`}${rel}` : `https://libraries.minecraft.net/${rel}`);
+      tasks.push(
+        pool
+          .run(() => downloadWithFallback(map(base), base, p, { sha1: lib?.downloads?.artifact?.sha1, retries: 2 }))
+          .then(() => {
+            downloadedLibs++;
+          })
+          .catch(() => {
+            /* 缺失库下载失败时游戏会给出明确报错 */
+          })
+      );
+    }
+  }
+
+  await Promise.all(tasks);
+  return { missingAssets, downloadedAssets, missingLibs: 0, downloadedLibs: 0 };
 }
 
 /** 构建完整启动命令 */

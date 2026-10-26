@@ -23,7 +23,7 @@ import { offlineIdentity } from "./core/auth/offline";
 import { AccountStore, AccountEntry, DEFAULT_USERNAME } from "./core/auth/accounts";
 import { loginWithMicrosoft, refreshMicrosoft, MsCredential } from "./core/auth/microsoft";
 import { mergeVersion } from "./core/launch/versionMerge";
-import { buildLaunchCommand } from "./core/launch/launcher";
+import { buildLaunchCommand, ensureGameFiles } from "./core/launch/launcher";
 import { spawnGame, GameProcess } from "./core/launch/process";
 import { VersionManifestSource } from "./core/download/versionManifest";
 import { installVersion, downloadVersionChain } from "./core/download/gameInstaller";
@@ -233,6 +233,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     for (const w of built.warnings) {
       term.warning(`[VSCL] ${w}`);
     }
+
+    // 启动前完整性补全（XMCL diagnose+repair 思路）：资产/依赖库存在性检查，仅补缺失
+    // （修复 HMCL 安装实例语言文件缺失 → 游戏回退英文的问题；文件齐备时毫秒级跳过）
+    await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: "VSCL：检查游戏文件完整性", cancellable: false },
+      async (progress) => {
+        const ensured = await ensureGameFiles({
+          gameDir,
+          merged,
+          classpath: built.args[built.args.indexOf("-cp") + 1]?.split(process.platform === "win32" ? ";" : ":") ?? [],
+          source: Settings.downloadSource(),
+          threads: Settings.downloadThreads(),
+          onProgress: (m) => progress.report({ message: m }),
+        });
+        if (ensured.downloadedAssets > 0) {
+          term.info(`[VSCL] 已补齐 ${ensured.downloadedAssets} 个缺失资源（含语言文件）`);
+        }
+      }
+    );
+
     term.info(`[VSCL] 启动 ${instance.id}（Java ${instance.javaMajor ?? "?"} · ${javaSource}）`);
 
     const proc = spawnGame(built.command, built.args, instance.dir, (line) => term.onGameLine(line), {
